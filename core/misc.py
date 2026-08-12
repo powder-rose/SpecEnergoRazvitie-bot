@@ -1214,9 +1214,7 @@ class Miscellaneous:
         is_entrepreneur = cls.is_individual_entrepreneur(normalized(0))
 
         required_fields = set(cls.COMPANY_FIELDS)
-        if is_entrepreneur:
-            # У индивидуального предпринимателя КПП отсутствует законно.
-            required_fields.discard(11)
+        required_fields.discard(11)  # КПП не считается обязательным реквизитом
 
         missing_fields = [
             cls.COMPANY_FIELDS[index]
