@@ -267,7 +267,7 @@ class Miscellaneous:
         """Дополняет ответ ИИ реквизитами с явными метками из исходного текста."""
 
         company = [
-            line.strip()
+            re.sub(r"^\d+[.)]\s*", "", line.strip())
             for line in self._send_text_to_gpt(prompt, source_text).splitlines()
         ]
 
@@ -1214,9 +1214,7 @@ class Miscellaneous:
         is_entrepreneur = cls.is_individual_entrepreneur(normalized(0))
 
         required_fields = set(cls.COMPANY_FIELDS)
-        if is_entrepreneur:
-            # У индивидуального предпринимателя КПП отсутствует законно.
-            required_fields.discard(11)
+        required_fields.discard(11)  # КПП не считается обязательным реквизитом
 
         missing_fields = [
             cls.COMPANY_FIELDS[index]

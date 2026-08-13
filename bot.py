@@ -143,6 +143,38 @@ def employees_only(handler: Callable):
     return wrapper
 
 
+def safe_handler(handler: Callable):
+    """Ловит любые непредвиденные ошибки в хендлере, чтобы не уронить бота."""
+    @wraps(handler)
+    def wrapper(update, *args, **kwargs):
+        try:
+            return handler(update, *args, **kwargs)
+        except Exception:
+            message = getattr(update, "message", update)
+            chat_id = getattr(getattr(message, "chat", None), "id", None)
+            user_id = getattr(getattr(update, "from_user", None), "id", None)
+            LOGGER.exception(
+                "Необработанная ошибка в хендлере | handler=%s | user_id=%s",
+                handler.__name__,
+                user_id,
+            )
+            if chat_id is not None:
+                try:
+                    bot.send_message(
+                        chat_id,
+                        "❌ Произошла непредвиденная ошибка. Попробуйте ещё раз "
+                        "или нажмите «Начать».",
+                        reply_markup=control_keyboard(),
+                    )
+                except Exception:
+                    LOGGER.warning(
+                        "Не удалось отправить сообщение об ошибке | chat_id=%s",
+                        chat_id,
+                    )
+            return None
+    return wrapper
+
+
 def chat_lock(chat_id: int) -> threading.RLock:
     """Возвращает единственную блокировку для конкретного Telegram-чата."""
     with CHAT_LOCKS_GUARD:
@@ -345,6 +377,7 @@ def send_contract_document(chat_id: int, document_path: Path) -> None:
 
 
 @bot.message_handler(commands=["start"])
+@safe_handler
 @employees_only
 def welcome(message):
     with chat_lock(message.chat.id):
@@ -364,6 +397,7 @@ def welcome(message):
         in CONTROL_WORDS
     )
 )
+@safe_handler
 @employees_only
 def landing(message):
     user_id = message.from_user.id
@@ -396,7 +430,7 @@ def landing(message):
         )
         bot.register_next_step_handler(message, yourname)
 
-
+@safe_handler
 def yourname(message):
     if recover_if_requested(message) or not ensure_active_session(message):
         return
@@ -438,7 +472,7 @@ def parse_non_negative_integer(message, retry_handler: Callable) -> int | None:
         return None
     return int(answer)
 
-
+@safe_handler
 def costs(message):
     if recover_if_requested(message) or not ensure_active_session(message):
         return
@@ -453,7 +487,7 @@ def costs(message):
     )
     register_retry(message, complectation, "❔ Введите количество комплектов")
 
-
+@safe_handler
 def complectation(message):
     if recover_if_requested(message) or not ensure_active_session(message):
         return
@@ -488,6 +522,7 @@ def complectation(message):
 
 
 @bot.callback_query_handler(func=lambda callback: True)
+@safe_handler
 def callback_message(callback):
     bot.answer_callback_query(callback.id)
     user_id = callback.from_user.id
@@ -757,9 +792,15 @@ def notify_staff_after_restart() -> None:
 if __name__ == "__main__":
     LOGGER.info("Telegram-бот запускается")
     notify_staff_after_restart()
-    bot.infinity_polling(
-        skip_pending=True,
-        timeout=30,
-        long_polling_timeout=30,
-        allowed_updates=["message", "callback_query"],
-    )
+
+    while True:
+        try:
+            bot.infinity_polling(
+                skip_pending=True,
+                timeout=30,
+                long_polling_timeout=30,
+                allowed_updates=["message", "callback_query"],
+            )
+        except Exception:
+            LOGGER.exception("Критическая ошибка polling — перезапускаю через 5 секунд")
+            time.sleep(5)
