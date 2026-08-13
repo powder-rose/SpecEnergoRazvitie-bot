@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zlib1g-dev \
         libxml2-dev \
         libxslt1-dev \
+        ca-certificates \
+        wget \
+        antiword \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

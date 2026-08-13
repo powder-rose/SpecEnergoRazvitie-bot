@@ -1216,6 +1216,10 @@ class Miscellaneous:
         required_fields = set(cls.COMPANY_FIELDS)
         required_fields.discard(11)  # КПП не считается обязательным реквизитом
 
+        if is_entrepreneur:
+            # У ИП нет отдельного "наименования организации" — есть только ФИО
+            required_fields.discard(13)
+
         missing_fields = [
             cls.COMPANY_FIELDS[index]
             for index in sorted(required_fields)
