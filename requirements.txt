@@ -8,3 +8,4 @@ lxml>=5.2
 Pillow>=10.3
 truststore>=0.9
 pyTelegramBotAPI>=4.20
+textract>=1.6
