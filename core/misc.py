@@ -578,10 +578,29 @@ class Miscellaneous:
         read_path = path
 
         if path.suffix.lower() == ".docm":
-            # python-docx отказывается открывать .docm напрямую из-за другого
-            # Content-Type внутри архива, хотя структура файла та же, что у .docx.
-            temp_path = path.with_suffix(".docx")
-            shutil.copyfile(path, temp_path)
+            # python-docx проверяет Content-Type внутри самого архива, поэтому
+            # простого переименования расширения недостаточно — нужно подменить
+            # тип документа прямо в [Content_Types].xml.
+            temp_path = path.with_name(f"{path.stem}_as_docx.docx")
+            docm_type = (
+                "application/vnd.ms-word.document.macroEnabled.main+xml"
+            )
+            docx_type = (
+                "application/vnd.openxmlformats-officedocument"
+                ".wordprocessingml.document.main+xml"
+            )
+
+            with ZipFile(path, "r") as source_zip:
+                with ZipFile(temp_path, "w", ZIP_DEFLATED) as target_zip:
+                    for item in source_zip.infolist():
+                        data = source_zip.read(item.filename)
+                        if item.filename == "[Content_Types].xml":
+                            data = data.replace(
+                                docm_type.encode("utf-8"),
+                                docx_type.encode("utf-8"),
+                            )
+                        target_zip.writestr(item, data)
+
             read_path = temp_path
 
         try:
