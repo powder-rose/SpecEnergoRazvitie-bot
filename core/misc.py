@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import base64
 from copy import deepcopy
 import logging
@@ -572,19 +573,34 @@ class Miscellaneous:
 
     @staticmethod
     def _extract_docx_text(path: Path) -> str:
-        document = Document(path)
-        parts: list[str] = []
+        path = Path(path)
+        temp_path: Path | None = None
+        read_path = path
 
-        parts.extend(paragraph.text for paragraph in document.paragraphs)
-        for table in document.tables:
-            for row in table.rows:
-                parts.append("\t".join(cell.text for cell in row.cells))
+        if path.suffix.lower() == ".docm":
+            # python-docx отказывается открывать .docm напрямую из-за другого
+            # Content-Type внутри архива, хотя структура файла та же, что у .docx.
+            temp_path = path.with_suffix(".docx")
+            shutil.copyfile(path, temp_path)
+            read_path = temp_path
 
-        for section in document.sections:
-            parts.extend(p.text for p in section.header.paragraphs)
-            parts.extend(p.text for p in section.footer.paragraphs)
+        try:
+            document = Document(read_path)
+            parts: list[str] = []
 
-        return "\n".join(parts)
+            parts.extend(paragraph.text for paragraph in document.paragraphs)
+            for table in document.tables:
+                for row in table.rows:
+                    parts.append("\t".join(cell.text for cell in row.cells))
+
+            for section in document.sections:
+                parts.extend(p.text for p in section.header.paragraphs)
+                parts.extend(p.text for p in section.footer.paragraphs)
+
+            return "\n".join(parts)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
     @staticmethod
     def _extract_pdf_text(path: Path) -> str:
