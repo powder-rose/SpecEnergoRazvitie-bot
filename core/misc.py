@@ -86,7 +86,7 @@ class Miscellaneous:
     DOCM_MAIN_CONTENT_TYPE = (
         "application/vnd.ms-word.document.macroEnabled.main+xml"
     )
-    ALLOWED_EXTENSIONS = frozenset({".pdf", ".doc", ".docx"})
+    ALLOWED_EXTENSIONS = frozenset({".pdf", ".doc", ".docx", ".docm"})
     MAX_FILE_BYTES = 20 * 1024 * 1024
     MAX_DOCUMENT_CHARS = 100_000
     MAX_SCAN_PAGES = 10
@@ -446,6 +446,7 @@ class Miscellaneous:
 
         extractors = {
             ".docx": self._extract_docx_text,
+            ".docm": self._extract_docx_text,
             ".pdf": self._extract_pdf_text,
             ".doc": self._extract_doc_text,
         }
@@ -1439,23 +1440,20 @@ class Miscellaneous:
                     )
                     target_archive.writestr(item, data)
 
-    def bot_insert_req(
-        self,
-        user_data: dict[int, dict[str, Any]],
-        user_id: int,
-        company: list[str | None],
-        numer: str,
-        counting: str,
-        texted_costs: str,
-        texted_total: str,
-        way: str | Path | None = None,
+    def bot_insert_req_ser(
+            self,
+            user_data: dict[int, dict[str, Any]],
+            user_id: int,
+            company: list[str | None],
+            numer: str,
+            texted_total: str,
+            way: str | Path | None = None,
     ) -> Path:
         """
-        Формирует НЕ договор, а заполненную таблицу автозамен.
+        Формирует таблицу автозамен для договора ООО СПЕЦЭНЕРГОРАЗВИТИЕ.
 
-        Исходный template2.docm остаётся визуально неизменным:
-        заполняется только колонка «ИНФОРМАЦИЯ ОТ ЗАКАЗЧИКА».
-        Текст autozamena_001 ... autozamena_020 не меняется.
+        Использует отдельный шаблон 'ООО СПЕЦЭНЕРГОРАЗВИТИЕ.docm' и
+        отдельный набор полей user_data['ser_fields'].
         """
         self.validate_company_data(company)
 
@@ -1511,6 +1509,8 @@ class Miscellaneous:
             f'{now.year} года'
         )
 
+        ser_fields = user_data[user_id].get('ser_fields', {})
+
         replacements = {
             'autozamena_001': numer,
             'autozamena_002': date_start,
@@ -1523,18 +1523,25 @@ class Miscellaneous:
             'autozamena_009': ustav,
             'autozamena_010': field(5),
             'autozamena_011': field(6),
-            'autozamena_012': counting,
-            'autozamena_013': str(user_data[user_id]['cost']),
-            'autozamena_014': texted_costs,
-            'autozamena_015': str(user_data[user_id]['complects']),
-            'autozamena_016': str(user_data[user_id]['count_print']),
-            'autozamena_017': str(user_data[user_id]['count_sending']),
-            'autozamena_018': texted_total,
-            'autozamena_019': company_req,
-            'autozamena_020': banco,
+            'autozamena_012': counting if (counting := ser_fields.get('invoice_number', '')) else '',
+            'autozamena_013': ser_fields.get('invoice_date', ''),
+            'autozamena_014': ser_fields.get('months_count', ''),
+            'autozamena_015': ser_fields.get('cost_month', ''),
+            'autozamena_016': ser_fields.get('cost_total', ''),
+            'autozamena_017': texted_total,
+            'autozamena_018': ser_fields.get('advance', ''),
+            'autozamena_019': ser_fields.get('advance_period', ''),
+            'autozamena_020': ser_fields.get('object_address', ''),
+            'autozamena_021': ser_fields.get('object_name', ''),
+            'autozamena_022': ser_fields.get('service_period', ''),
+            'autozamena_023': ser_fields.get('visits_frequency', ''),
+            'autozamena_024': ser_fields.get('termination_period', ''),
+            'autozamena_025': ser_fields.get('email', ''),
+            'autozamena_026': company_req,
+            'autozamena_027': banco,
         }
 
-        template_path = self.CORE_DIR / 'template2.docm'
+        template_path = self.CORE_DIR / 'ООО СПЕЦЭНЕРГОРАЗВИТИЕ.docm'
         if not template_path.is_file():
             raise FileNotFoundError(
                 f'Не найден шаблон таблицы: {template_path}'
@@ -1542,8 +1549,8 @@ class Miscellaneous:
 
         source_id = Path(way).stem if way else uuid4().hex
         output_path = (
-            self.DOCS_DIR
-            / f'ТАБЛИЦА_АВТОЗАМЕНЫ_{source_id}.docm'
+                self.DOCS_DIR
+                / f'ДОГОВОР_СЕР_{source_id}.docm'
         )
 
         self._fill_replacement_table(
@@ -1553,7 +1560,7 @@ class Miscellaneous:
         )
 
         LOGGER.info(
-            'Таблица автозамен сформирована | '
+            'Таблица автозамен СЕР сформирована | '
             'user_id=%s | organization=%s | path=%s',
             user_id,
             organization_full_name,

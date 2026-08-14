@@ -423,12 +423,108 @@ def landing(message):
             "scenario_id": uuid4().hex,
         }
         LOGGER.info("Сценарий запущен | user_id=%s", user_id)
+        contract_type_markup = types.InlineKeyboardMarkup()
+        contract_type_markup.row(
+            types.InlineKeyboardButton("ООО СПЕЦКОНС", callback_data="contract_specons"),
+            types.InlineKeyboardButton("ООО СПЕЦЭНЕРГОРАЗВИТИЕ", callback_data="contract_ser"),
+        )
         bot.send_message(
             message.chat.id,
-            start_message,
-            reply_markup=control_keyboard(),
+            "❔ Выберите тип договора",
+            reply_markup=contract_type_markup,
         )
-        bot.register_next_step_handler(message, yourname)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data in ("contract_specons", "contract_ser"))
+@safe_handler
+def choose_contract_type(callback):
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    is_ser = callback.data == "contract_ser"
+    user_data[user_id]["contract_type"] = "ser" if is_ser else "specons"
+
+    contract_label = "ООО СПЕЦЭНЕРГОРАЗВИТИЕ" if is_ser else "ООО СПЕЦКОНС"
+    bot.send_message(
+        chat_id,
+        f"✅ Выбран тип договора: <b>{contract_label}</b>",
+        reply_markup=control_keyboard(),
+    )
+    bot.send_message(chat_id, start_message, reply_markup=control_keyboard())
+    bot.register_next_step_handler(callback.message, yourname)
+
+
+SER_QUESTIONS = [
+    ("invoice_number", "❔ Введите номер счёта"),
+    ("invoice_date", "❔ Введите дату счёта"),
+    ("months_count", "❔ Введите количество месяцев обслуживания"),
+    ("cost_month", "❔ Введите стоимость обслуживания в месяц"),
+    ("cost_total", "❔ Введите стоимость обслуживания итого за период"),
+    ("advance", "❔ Введите сумму аванса"),
+    ("advance_period", "❔ Введите аванс за период (например, за какой месяц)"),
+    ("object_address", "❔ Введите адрес объекта"),
+    ("object_name", "❔ Введите наименование объекта"),
+    ("service_period", "❔ Введите период тех. обслуживания"),
+    ("visits_frequency", "❔ Введите периодичность обходов"),
+    ("termination_period", "❔ Введите срок расторжения договора"),
+    ("email", "❔ Введите электронную почту заказчика"),
+]
+
+
+def ask_ser_field(message, step_index: int) -> None:
+    user_id = message.from_user.id
+    if step_index >= len(SER_QUESTIONS):
+        finish_ser_fields(message)
+        return
+
+    key, prompt = SER_QUESTIONS[step_index]
+
+    def handler(msg, index=step_index, field_key=key):
+        if recover_if_requested(msg) or not ensure_active_session(msg):
+            return
+        answer = (msg.text or "").strip()
+        if not answer:
+            register_retry(
+                msg,
+                lambda m, i=index: ask_ser_field(m, i),
+                "❌ Значение не может быть пустым.",
+            )
+            return
+        user_data[msg.from_user.id].setdefault("ser_fields", {})[field_key] = answer
+        ask_ser_field(msg, index + 1)
+
+    sent = bot.send_message(message.chat.id, prompt, reply_markup=control_keyboard())
+    replace_next_step(sent, handler)
+
+
+def finish_ser_fields(message) -> None:
+    user_id = message.from_user.id
+    bot.send_message(
+        message.chat.id,
+        "✅ Все дополнительные поля заполнены.",
+        reply_markup=control_keyboard(),
+    )
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("🧾 Документ", callback_data="doc"),
+        types.InlineKeyboardButton("🖼️ Картинка", callback_data="pic"),
+    )
+    markup.row(
+        types.InlineKeyboardButton("📄 PDF-скан", callback_data="pdf"),
+        types.InlineKeyboardButton("📢 Сообщение", callback_data="mes"),
+    )
+    bot.send_message(
+        message.chat.id,
+        "❔ Выберите источник реквизитов",
+        reply_markup=markup,
+    )
+
+
 
 @safe_handler
 def yourname(message):
@@ -458,7 +554,10 @@ def yourname(message):
         f"<b>{user_data[user_id]['lastname']}</b>",
         reply_markup=control_keyboard(),
     )
-    register_retry(message, costs, "❔ Введите стоимость разовой услуги")
+    if user_data[user_id].get("contract_type") == "ser":
+        ask_ser_field(message, 0)
+    else:
+        register_retry(message, costs, "❔ Введите стоимость разовой услуги")
 
 
 def parse_non_negative_integer(message, retry_handler: Callable) -> int | None:
@@ -582,21 +681,38 @@ def build_and_send_contract(
             reply_markup=control_keyboard(),
         )
         numer_contract = ms.get_bot_doc_num(user_data, user_id)
-        numer_count = ms.get_bot_count_num(user_data, user_id)
-        texted_costs = ms.integer_texted(user_data[user_id]["cost"])
-        texted_sending = ms.integer_texted(
-            user_data[user_id]["count_sending"]
-        )
-        local_doc = ms.bot_insert_req(
-            user_data,
-            user_id,
-            company_data,
-            numer_contract,
-            numer_count,
-            texted_costs,
-            texted_sending,
-            source_path,
-        )
+
+        if user_data[user_id].get("contract_type") == "ser":
+            ser_fields = user_data[user_id].get("ser_fields", {})
+            texted_total = ms.integer_texted(
+                int(ser_fields.get("cost_total", "0") or 0)
+                if ser_fields.get("cost_total", "").isdigit()
+                else 0
+            )
+            local_doc = ms.bot_insert_req_ser(
+                user_data,
+                user_id,
+                company_data,
+                numer_contract,
+                texted_total,
+                source_path,
+            )
+        else:
+            numer_count = ms.get_bot_count_num(user_data, user_id)
+            texted_costs = ms.integer_texted(user_data[user_id]["cost"])
+            texted_sending = ms.integer_texted(
+                user_data[user_id]["count_sending"]
+            )
+            local_doc = ms.bot_insert_req(
+                user_data,
+                user_id,
+                company_data,
+                numer_contract,
+                numer_count,
+                texted_costs,
+                texted_sending,
+                source_path,
+            )
 
         if (
             scenario_id
