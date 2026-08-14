@@ -22,6 +22,11 @@ import requests
 from lxml import etree
 from docx import Document
 from PIL import Image, ImageOps, UnidentifiedImageError
+from docx.opc.part import PartFactory
+from docx.parts.document import DocumentPart
+
+DOCM_CONTENT_TYPE = "application/vnd.ms-word.document.macroEnabled.main+xml"
+PartFactory.part_type_for[DOCM_CONTENT_TYPE] = DocumentPart
 
 
 LOGGER = logging.getLogger(__name__)
