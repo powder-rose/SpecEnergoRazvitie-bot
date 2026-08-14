@@ -463,6 +463,10 @@ class Miscellaneous:
         except DocumentExtractionError:
             raise
         except Exception as exc:
+            LOGGER.exception(
+                "Внутренняя ошибка извлечения текста | extension=%s",
+                extension,
+            )
             raise DocumentExtractionError(
                 f"Не удалось извлечь текст из файла {extension}"
             ) from exc
