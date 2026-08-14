@@ -470,11 +470,21 @@ SER_QUESTIONS = [
     ("object_address", "❔ Введите адрес объекта"),
     ("object_name", "❔ Введите наименование объекта"),
     ("service_period", "❔ Введите период тех. обслуживания"),
-    ("visits_frequency", "❔ Введите периодичность обходов"),
     ("termination_period", "❔ Введите срок расторжения договора"),
     ("email", "❔ Введите электронную почту заказчика"),
 ]
 
+VISITS_FREQUENCY_OPTIONS = [
+    "Ежеквартально",
+    "Ежемесячно",
+    "Один раз в два месяца",
+]
+
+ADVANCE_PERIOD_OPTIONS = [
+    "за один месяц",
+    "за два месяца",
+    "за три месяца",
+]
 
 def ask_ser_field(message, step_index: int) -> None:
     user_id = message.from_user.id
@@ -503,12 +513,70 @@ def ask_ser_field(message, step_index: int) -> None:
 
 
 def finish_ser_fields(message) -> None:
-    user_id = message.from_user.id
+    markup = types.InlineKeyboardMarkup()
+    for option in ADVANCE_PERIOD_OPTIONS:
+        markup.add(
+            types.InlineKeyboardButton(option, callback_data=f"advperiod_{option}")
+        )
     bot.send_message(
         message.chat.id,
-        "✅ Все дополнительные поля заполнены.",
+        "❔ Выберите аванс за период",
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith("advperiod_"))
+@safe_handler
+def choose_advance_period(callback):
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    option = callback.data.removeprefix("advperiod_")
+    user_data[user_id].setdefault("ser_fields", {})["advance_period"] = option
+
+    bot.send_message(
+        chat_id,
+        f"✅ Аванс за период: <b>{option}</b>",
         reply_markup=control_keyboard(),
     )
+
+    markup = types.InlineKeyboardMarkup()
+    for freq_option in VISITS_FREQUENCY_OPTIONS:
+        markup.add(
+            types.InlineKeyboardButton(freq_option, callback_data=f"visits_{freq_option}")
+        )
+    bot.send_message(
+        chat_id,
+        "❔ Выберите периодичность обходов",
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith("visits_"))
+@safe_handler
+def choose_visits_frequency(callback):
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    option = callback.data.removeprefix("visits_")
+    user_data[user_id].setdefault("ser_fields", {})["visits_frequency"] = option
+
+    bot.send_message(
+        chat_id,
+        f"✅ Периодичность обходов: <b>{option}</b>",
+        reply_markup=control_keyboard(),
+    )
+
     markup = types.InlineKeyboardMarkup()
     markup.row(
         types.InlineKeyboardButton("🧾 Документ", callback_data="doc"),
@@ -519,7 +587,7 @@ def finish_ser_fields(message) -> None:
         types.InlineKeyboardButton("📢 Сообщение", callback_data="mes"),
     )
     bot.send_message(
-        message.chat.id,
+        chat_id,
         "❔ Выберите источник реквизитов",
         reply_markup=markup,
     )
