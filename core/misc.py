@@ -1555,6 +1555,15 @@ class Miscellaneous:
 
         ser_fields = user_data[user_id].get('ser_fields', {})
 
+        months_count_raw = ser_fields.get('months_count', '')
+        cost_month_raw = ser_fields.get('cost_month', '')
+
+        try:
+            cost_total_value = int(months_count_raw) * int(cost_month_raw)
+            cost_total = str(cost_total_value)
+        except (ValueError, TypeError):
+            cost_total = ''
+
         replacements = {
             'autozamena_001': numer,
             'autozamena_002': date_start,
@@ -1567,11 +1576,11 @@ class Miscellaneous:
             'autozamena_009': ustav,
             'autozamena_010': field(5),
             'autozamena_011': field(6),
-            'autozamena_012': counting if (counting := ser_fields.get('invoice_number', '')) else '',
+            'autozamena_012': ser_fields.get('invoice_number', ''),
             'autozamena_013': ser_fields.get('invoice_date', ''),
-            'autozamena_014': ser_fields.get('months_count', ''),
-            'autozamena_015': ser_fields.get('cost_month', ''),
-            'autozamena_016': ser_fields.get('cost_total', ''),
+            'autozamena_014': months_count_raw,
+            'autozamena_015': cost_month_raw,
+            'autozamena_016': cost_total,
             'autozamena_017': texted_total,
             'autozamena_018': ser_fields.get('advance', ''),
             'autozamena_019': ser_fields.get('advance_period', ''),

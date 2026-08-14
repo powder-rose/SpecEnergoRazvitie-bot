@@ -464,7 +464,6 @@ SER_QUESTIONS = [
     ("invoice_date", "❔ Введите дату счёта"),
     ("months_count", "❔ Введите количество месяцев обслуживания"),
     ("cost_month", "❔ Введите стоимость обслуживания в месяц"),
-    ("cost_total", "❔ Введите стоимость обслуживания итого за период"),
     ("advance", "❔ Введите сумму аванса"),
     ("advance_period", "❔ Введите аванс за период (например, за какой месяц)"),
     ("object_address", "❔ Введите адрес объекта"),
@@ -752,11 +751,13 @@ def build_and_send_contract(
 
         if user_data[user_id].get("contract_type") == "ser":
             ser_fields = user_data[user_id].get("ser_fields", {})
-            texted_total = ms.integer_texted(
-                int(ser_fields.get("cost_total", "0") or 0)
-                if ser_fields.get("cost_total", "").isdigit()
-                else 0
-            )
+            months_count = ser_fields.get("months_count", "")
+            cost_month = ser_fields.get("cost_month", "")
+            try:
+                cost_total_value = int(months_count) * int(cost_month)
+            except (ValueError, TypeError):
+                cost_total_value = 0
+            texted_total = ms.integer_texted(cost_total_value)
             local_doc = ms.bot_insert_req_ser(
                 user_data,
                 user_id,
