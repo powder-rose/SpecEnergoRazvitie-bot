@@ -1404,7 +1404,7 @@ class Miscellaneous:
                     candidate.xpath('.//w:t/text()', namespaces=namespaces)
                 )
                 candidate_matches = set(
-                    re.findall(r'autozamena_\d{3}', candidate_text)
+                    re.findall(r'autozamena_\w+|electron_pochta', candidate_text)
                 )
 
                 if len(candidate_matches & expected) > len(best_matches & expected):
@@ -1427,7 +1427,7 @@ class Miscellaneous:
                 row_text = ''.join(
                     row.xpath('.//w:t/text()', namespaces=namespaces)
                 )
-                match = re.search(r'autozamena_\d{3}', row_text)
+                match = re.search(r'autozamena_\w+|electron_pochta', row_text)
                 if not match:
                     continue
 
@@ -1699,7 +1699,7 @@ class Miscellaneous:
             'autozamena_011': field(6),
             'autozamena_012': ser_fields.get('invoice_number', ''),
             'autozamena_013': ser_fields.get('invoice_date', ''),
-            'autozamena_014': months_count_raw,
+            'autozamena_F013': months_count_raw,
             'autozamena_015': cost_month_raw,
             'autozamena_016': cost_total,
             'autozamena_017': texted_total,
@@ -1710,7 +1710,7 @@ class Miscellaneous:
             'autozamena_022': ser_fields.get('service_period', ''),
             'autozamena_023': ser_fields.get('visits_frequency', ''),
             'autozamena_024': ser_fields.get('termination_period', ''),
-            'autozamena_025': ser_fields.get('email', ''),
+            'electron_pochta': ser_fields.get('email', ''),
             'autozamena_026': company_req,
             'autozamena_027': banco,
         }
