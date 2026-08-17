@@ -615,9 +615,9 @@ def choose_visits_frequency(callback):
     )
 
     markup = types.InlineKeyboardMarkup()
-    for term_option in TERMINATION_PERIOD_OPTIONS:
+    for term_index, term_option in enumerate(TERMINATION_PERIOD_OPTIONS):
         markup.add(
-            types.InlineKeyboardButton(term_option, callback_data=f"termperiod_{term_option}")
+            types.InlineKeyboardButton(term_option, callback_data=f"termperiod_{term_index}")
         )
     bot.send_message(
         chat_id,
@@ -637,7 +637,8 @@ def choose_termination_period(callback):
         show_start_button(callback.message, user_id)
         return
 
-    option = callback.data.removeprefix("termperiod_")
+    option_index = int(callback.data.removeprefix("termperiod_"))
+    option = TERMINATION_PERIOD_OPTIONS[option_index]
     user_data[user_id].setdefault("ser_fields", {})["termination_period"] = option
 
     bot.send_message(

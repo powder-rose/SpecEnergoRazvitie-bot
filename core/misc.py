@@ -1484,6 +1484,127 @@ class Miscellaneous:
                     )
                     target_archive.writestr(item, data)
 
+    def bot_insert_req(
+            self,
+            user_data: dict[int, dict[str, Any]],
+            user_id: int,
+            company: list[str | None],
+            numer: str,
+            counting: str,
+            texted_costs: str,
+            texted_total: str,
+            way: str | Path | None = None,
+    ) -> Path:
+        """
+        Формирует НЕ договор, а заполненную таблицу автозамен.
+
+        Исходный template2.docm остаётся визуально неизменным:
+        заполняется только колонка «ИНФОРМАЦИЯ ОТ ЗАКАЗЧИКА».
+        Текст autozamena_001 ... autozamena_020 не меняется.
+        """
+        self.validate_company_data(company)
+
+        def field(index: int) -> str:
+            value = company[index] if index < len(company) else None
+            return str(value).strip() if value is not None else ''
+
+        is_entrepreneur = self.is_individual_entrepreneur(field(0))
+        organization_full_name = self.build_organization_full_name(
+            field(0),
+            field(13),
+            field(4),
+        )
+        fio_short = self.abbreviate_fio(field(4))
+
+        ustav = (
+            'листа записи ЕГРИП'
+            if is_entrepreneur
+            else 'Устава'
+        )
+
+        company_req = '\n'.join(
+            value
+            for value in (
+                f'Юридический адрес: {field(6)}' if field(6) else '',
+                f'ОГРН {field(12)}' if field(12) else '',
+                f'ИНН {field(5)}' if field(5) else '',
+                (
+                    f'КПП {field(11)}'
+                    if not is_entrepreneur and field(11)
+                    else ''
+                ),
+            )
+            if value
+        )
+
+        banco = '\n'.join(
+            value
+            for value in (
+                'Полное наименование банка',
+                field(7),
+                f'РС {field(8)}' if field(8) else '',
+                f'КС {field(9)}' if field(9) else '',
+                f'БИК {field(10)}' if field(10) else '',
+            )
+            if value
+        )
+
+        now = datetime.now()
+        date_start = (
+            f'{now.day} '
+            f'{self.GENITIVUS[now.month]} '
+            f'{now.year} года'
+        )
+
+        replacements = {
+            'autozamena_001': numer,
+            'autozamena_002': date_start,
+            'autozamena_003': user_data[user_id]['ending'],
+            'autozamena_004': organization_full_name,
+            'autozamena_005': field(1),
+            'autozamena_006': field(2),
+            'autozamena_007': field(3),
+            'autozamena_008': fio_short,
+            'autozamena_009': ustav,
+            'autozamena_010': field(5),
+            'autozamena_011': field(6),
+            'autozamena_012': counting,
+            'autozamena_013': str(user_data[user_id]['cost']),
+            'autozamena_014': texted_costs,
+            'autozamena_015': str(user_data[user_id]['complects']),
+            'autozamena_016': str(user_data[user_id]['count_print']),
+            'autozamena_017': str(user_data[user_id]['count_sending']),
+            'autozamena_018': texted_total,
+            'autozamena_019': company_req,
+            'autozamena_020': banco,
+        }
+
+        template_path = self.CORE_DIR / 'template2.docm'
+        if not template_path.is_file():
+            raise FileNotFoundError(
+                f'Не найден шаблон таблицы: {template_path}'
+            )
+
+        source_id = Path(way).stem if way else uuid4().hex
+        output_path = (
+                self.DOCS_DIR
+                / f'ТАБЛИЦА_АВТОЗАМЕНЫ_{source_id}.docm'
+        )
+
+        self._fill_replacement_table(
+            template_path,
+            output_path,
+            replacements,
+        )
+
+        LOGGER.info(
+            'Таблица автозамен сформирована | '
+            'user_id=%s | organization=%s | path=%s',
+            user_id,
+            organization_full_name,
+            output_path,
+        )
+        return output_path
     def bot_insert_req_ser(
             self,
             user_data: dict[int, dict[str, Any]],
