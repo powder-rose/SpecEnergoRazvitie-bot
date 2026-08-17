@@ -462,15 +462,20 @@ def choose_contract_type(callback):
 SER_QUESTIONS = [
     ("invoice_number", "❔ Введите номер счёта"),
     ("invoice_date", "❔ Введите дату счёта"),
-    ("months_count", "❔ Введите количество месяцев обслуживания"),
     ("cost_month", "❔ Введите стоимость обслуживания в месяц"),
     ("advance", "❔ Введите сумму аванса"),
-    ("advance_period", "❔ Введите аванс за период (например, за какой месяц)"),
     ("object_address", "❔ Введите адрес объекта"),
     ("object_name", "❔ Введите наименование объекта"),
     ("service_period", "❔ Введите период тех. обслуживания"),
-    ("termination_period", "❔ Введите срок расторжения договора"),
     ("email", "❔ Введите электронную почту заказчика"),
+]
+
+MONTHS_COUNT_OPTIONS = ["3", "2", "1"]
+
+TERMINATION_PERIOD_OPTIONS = [
+    "90 (девяносто) календарных дней",
+    "60 (шестьдесят) календарных дней",
+    "30 (тридцать) календарных дней",
 ]
 
 VISITS_FREQUENCY_OPTIONS = [
@@ -484,6 +489,7 @@ ADVANCE_PERIOD_OPTIONS = [
     "за два месяца",
     "за три месяца",
 ]
+
 
 def ask_ser_field(message, step_index: int) -> None:
     user_id = message.from_user.id
@@ -513,12 +519,44 @@ def ask_ser_field(message, step_index: int) -> None:
 
 def finish_ser_fields(message) -> None:
     markup = types.InlineKeyboardMarkup()
-    for option in ADVANCE_PERIOD_OPTIONS:
+    for option in MONTHS_COUNT_OPTIONS:
         markup.add(
-            types.InlineKeyboardButton(option, callback_data=f"advperiod_{option}")
+            types.InlineKeyboardButton(option, callback_data=f"months_{option}")
         )
     bot.send_message(
         message.chat.id,
+        "❔ Выберите количество месяцев обслуживания",
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith("months_"))
+@safe_handler
+def choose_months_count(callback):
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    option = callback.data.removeprefix("months_")
+    user_data[user_id].setdefault("ser_fields", {})["months_count"] = option
+
+    bot.send_message(
+        chat_id,
+        f"✅ Количество месяцев: <b>{option}</b>",
+        reply_markup=control_keyboard(),
+    )
+
+    markup = types.InlineKeyboardMarkup()
+    for advperiod_option in ADVANCE_PERIOD_OPTIONS:
+        markup.add(
+            types.InlineKeyboardButton(advperiod_option, callback_data=f"advperiod_{advperiod_option}")
+        )
+    bot.send_message(
+        chat_id,
         "❔ Выберите аванс за период",
         reply_markup=markup,
     )
@@ -577,6 +615,38 @@ def choose_visits_frequency(callback):
     )
 
     markup = types.InlineKeyboardMarkup()
+    for term_option in TERMINATION_PERIOD_OPTIONS:
+        markup.add(
+            types.InlineKeyboardButton(term_option, callback_data=f"termperiod_{term_option}")
+        )
+    bot.send_message(
+        chat_id,
+        "❔ Выберите срок расторжения договора",
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith("termperiod_"))
+@safe_handler
+def choose_termination_period(callback):
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    option = callback.data.removeprefix("termperiod_")
+    user_data[user_id].setdefault("ser_fields", {})["termination_period"] = option
+
+    bot.send_message(
+        chat_id,
+        f"✅ Срок расторжения: <b>{option}</b>",
+        reply_markup=control_keyboard(),
+    )
+
+    markup = types.InlineKeyboardMarkup()
     markup.row(
         types.InlineKeyboardButton("🧾 Документ", callback_data="doc"),
         types.InlineKeyboardButton("🖼️ Картинка", callback_data="pic"),
@@ -590,7 +660,6 @@ def choose_visits_frequency(callback):
         "❔ Выберите источник реквизитов",
         reply_markup=markup,
     )
-
 
 
 @safe_handler
@@ -638,6 +707,7 @@ def parse_non_negative_integer(message, retry_handler: Callable) -> int | None:
         return None
     return int(answer)
 
+
 @safe_handler
 def costs(message):
     if recover_if_requested(message) or not ensure_active_session(message):
@@ -652,6 +722,7 @@ def costs(message):
         reply_markup=control_keyboard(),
     )
     register_retry(message, complectation, "❔ Введите количество комплектов")
+
 
 @safe_handler
 def complectation(message):
