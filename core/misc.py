@@ -29,7 +29,6 @@ from docx.parts.document import DocumentPart
 DOCM_CONTENT_TYPE = "application/vnd.ms-word.document.macroEnabled.main+xml"
 PartFactory.part_type_for[DOCM_CONTENT_TYPE] = DocumentPart
 
-
 LOGGER = logging.getLogger(__name__)
 
 
@@ -155,11 +154,11 @@ class Miscellaneous:
     }
 
     def __init__(
-        self,
-        *,
-        bot_dir: Path | None = None,
-        prompts_dir: Path | None = None,
-        trust_env: bool = True,
+            self,
+            *,
+            bot_dir: Path | None = None,
+            prompts_dir: Path | None = None,
+            trust_env: bool = True,
     ) -> None:
         self.CORE_DIR = Path(__file__).resolve().parent
         self.PROJECT_DIR = self.CORE_DIR.parent
@@ -173,10 +172,10 @@ class Miscellaneous:
         self.DOC_NUMBERS_DIR = self.CORE_DIR / "docs_numers"
         self.COUNT_NUMBERS_DIR = self.CORE_DIR / "counting_numers"
         for directory in (
-            self.USERS_DOCS_DIR,
-            self.DOCS_DIR,
-            self.DOC_NUMBERS_DIR,
-            self.COUNT_NUMBERS_DIR,
+                self.USERS_DOCS_DIR,
+                self.DOCS_DIR,
+                self.DOC_NUMBERS_DIR,
+                self.COUNT_NUMBERS_DIR,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -366,8 +365,6 @@ class Miscellaneous:
                 company[index] = value[0].upper() + value[1:]
 
         return company
-
-
 
     def sent_message_to_ai(self, message: str) -> list[str]:
         text = (message or "").strip()
@@ -683,8 +680,8 @@ class Miscellaneous:
         image = ImageOps.exif_transpose(source)
 
         if (
-            image.width * image.height < self.OCR_MIN_PIXELS
-            or min(image.width, image.height) < self.OCR_MIN_SIDE
+                image.width * image.height < self.OCR_MIN_PIXELS
+                or min(image.width, image.height) < self.OCR_MIN_SIDE
         ):
             raise DocumentExtractionError(
                 "Изображение слишком маленькое для надёжного распознавания. "
@@ -728,11 +725,11 @@ class Miscellaneous:
             len(content),
         )
         return content
-    
+
     def sent_image_to_ai(
-        self,
-        path: str | Path,
-        extension: str | None = None,
+            self,
+            path: str | Path,
+            extension: str | None = None,
     ) -> list[str]:
         del extension  # MIME определяется после нормализации изображения.
         image_path = Path(path)
@@ -942,12 +939,12 @@ class Miscellaneous:
         return result.strip()
 
     def _post_json(
-        self,
-        url: str,
-        headers: dict[str, str],
-        payload: dict[str, Any],
-        *,
-        operation: str,
+            self,
+            url: str,
+            headers: dict[str, str],
+            payload: dict[str, Any],
+            *,
+            operation: str,
     ) -> dict[str, Any]:
         started_at = time.monotonic()
         is_ocr = operation == "ocr"
@@ -1043,9 +1040,9 @@ class Miscellaneous:
         )
 
     def get_bot_doc_num(
-        self,
-        user_data: dict[int, dict[str, Any]],
-        user_id: int,
+            self,
+            user_data: dict[int, dict[str, Any]],
+            user_id: int,
     ) -> str:
         return self._get_number(
             user_data,
@@ -1056,9 +1053,9 @@ class Miscellaneous:
         )
 
     def get_bot_count_num(
-        self,
-        user_data: dict[int, dict[str, Any]],
-        user_id: int,
+            self,
+            user_data: dict[int, dict[str, Any]],
+            user_id: int,
     ) -> str:
         return self._get_number(
             user_data,
@@ -1069,12 +1066,12 @@ class Miscellaneous:
         )
 
     def _get_number(
-        self,
-        user_data: dict[int, dict[str, Any]],
-        user_id: int,
-        directory: Path,
-        suffix: str,
-        date_format: str,
+            self,
+            user_data: dict[int, dict[str, Any]],
+            user_id: int,
+            directory: Path,
+            suffix: str,
+            date_format: str,
     ) -> str:
         """
         Возвращает следующий номер и сразу резервирует его.
@@ -1124,10 +1121,10 @@ class Miscellaneous:
         """Определяет ИП исключительно по организационно-правовой форме."""
         normalized = " ".join(str(organization_type or "").casefold().split())
         return (
-            normalized == "ип"
-            or normalized.startswith("ип ")
-            or "индивидуальный предприниматель" in normalized
-            or "индивидуального предпринимателя" in normalized
+                normalized == "ип"
+                or normalized.startswith("ип ")
+                or "индивидуальный предприниматель" in normalized
+                or "индивидуального предпринимателя" in normalized
         )
 
     @staticmethod
@@ -1279,10 +1276,10 @@ class Miscellaneous:
 
     @classmethod
     def _set_replacement_cell_value(
-        cls,
-        container: Any,
-        value: str,
-        namespaces: dict[str, str],
+            cls,
+            container: Any,
+            value: str,
+            namespaces: dict[str, str],
     ) -> None:
         """
         Записывает значение в колонку «ИНФОРМАЦИЯ ОТ ЗАКАЗЧИКА».
@@ -1298,8 +1295,8 @@ class Miscellaneous:
             # После заполнения Word не должен показывать текст-заполнитель
             # «Выберите элемент.».
             for placeholder in container.xpath(
-                './w:sdtPr/w:showingPlcHdr',
-                namespaces=namespaces,
+                    './w:sdtPr/w:showingPlcHdr',
+                    namespaces=namespaces,
             ):
                 placeholder.getparent().remove(placeholder)
 
@@ -1362,10 +1359,10 @@ class Miscellaneous:
 
     @classmethod
     def _fill_replacement_table(
-        cls,
-        template_path: Path,
-        output_path: Path,
-        replacements: dict[str, Any],
+            cls,
+            template_path: Path,
+            output_path: Path,
+            replacements: dict[str, Any],
     ) -> None:
         """
         Создаёт копию исходной таблицы и заполняет ТОЛЬКО колонку 4.
@@ -1605,6 +1602,7 @@ class Miscellaneous:
             output_path,
         )
         return output_path
+
     def bot_insert_req_ser(
             self,
             user_data: dict[int, dict[str, Any]],
@@ -1690,7 +1688,7 @@ class Miscellaneous:
             'autozamena_002': date_start,
             'autozamena_003': user_data[user_id]['ending'],
             'autozamena_004': organization_full_name,
-            'autozamena_005': field(1) + ' ',
+            'autozamena_005': field(1),
             'autozamena_006': field(2),
             'autozamena_007': field(3),
             'autozamena_008': fio_short,
@@ -1711,6 +1709,8 @@ class Miscellaneous:
             'autozamena_023': ser_fields.get('visits_frequency', ''),
             'autozamena_024': ser_fields.get('termination_period', ''),
             'autozamena_025': ser_fields.get('email', ''),
+            'autozamena_026': company_req,
+            'autozamena_027': banco,
         }
 
         template_path = self.CORE_DIR / 'ООО СПЕЦЭНЕРГОРАЗВИТИЕ.docm'
@@ -1739,4 +1739,3 @@ class Miscellaneous:
             output_path,
         )
         return output_path
-
