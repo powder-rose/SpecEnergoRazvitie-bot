@@ -1690,7 +1690,7 @@ class Miscellaneous:
             'autozamena_002': date_start,
             'autozamena_003': user_data[user_id]['ending'],
             'autozamena_004': organization_full_name,
-            'autozamena_005': field(1),
+            'autozamena_005': field(1) + ' ',
             'autozamena_006': field(2),
             'autozamena_007': field(3),
             'autozamena_008': fio_short,
