@@ -1248,8 +1248,21 @@ class Miscellaneous:
         return f"{full_type} {name}".strip()
 
     @classmethod
-    def validate_company_data(cls, company: list[str | None]) -> None:
-        """Проверяет обязательные реквизиты до резервирования номера договора."""
+    def validate_company_data(
+            cls,
+            company: list[str | None],
+            *,
+            raise_on_missing: bool = True,
+    ) -> list[str]:
+        """
+        Возвращает список отсутствующих обязательных реквизитов.
+
+        По умолчанию сохраняется прежнее строгое поведение: при нехватке
+        реквизитов возбуждается MissingCompanyDetailsError. Интерфейсы,
+        которым нужно сформировать черновик даже из неполных данных (MAX),
+        передают raise_on_missing=False и получают список пропусков без
+        остановки формирования документа.
+        """
 
         def normalized(index: int) -> str:
             if index >= len(company) or company[index] is None:
@@ -1272,10 +1285,14 @@ class Miscellaneous:
         ]
         if missing_fields:
             LOGGER.warning(
-                "ИИ вернул неполные реквизиты | missing=%s",
+                "ИИ вернул неполные реквизиты | missing=%s | strict=%s",
                 ", ".join(missing_fields),
+                raise_on_missing,
             )
-            raise MissingCompanyDetailsError(missing_fields)
+            if raise_on_missing:
+                raise MissingCompanyDetailsError(missing_fields)
+
+        return missing_fields
 
     @classmethod
     def _set_replacement_cell_value(
@@ -1521,6 +1538,8 @@ class Miscellaneous:
             texted_costs: str,
             texted_total: str,
             way: str | Path | None = None,
+            *,
+            allow_incomplete: bool = False,
     ) -> Path:
         """
         Формирует НЕ договор, а заполненную таблицу автозамен.
@@ -1529,7 +1548,10 @@ class Miscellaneous:
         заполняется только колонка «ИНФОРМАЦИЯ ОТ ЗАКАЗЧИКА».
         Текст autozamena_001 ... autozamena_020 не меняется.
         """
-        self.validate_company_data(company)
+        self.validate_company_data(
+            company,
+            raise_on_missing=not allow_incomplete,
+        )
 
         def field(index: int) -> str:
             value = company[index] if index < len(company) else None
@@ -1683,6 +1705,8 @@ class Miscellaneous:
             numer: str,
             texted_total: str,
             way: str | Path | None = None,
+            *,
+            allow_incomplete: bool = False,
     ) -> Path:
         """
         Формирует таблицу автозамен для договора ООО СПЕЦЭНЕРГОРАЗВИТИЕ.
@@ -1690,7 +1714,10 @@ class Miscellaneous:
         Использует отдельный шаблон 'ООО СПЕЦЭНЕРГОРАЗВИТИЕ.docm' и
         отдельный набор полей user_data['ser_fields'].
         """
-        self.validate_company_data(company)
+        self.validate_company_data(
+            company,
+            raise_on_missing=not allow_incomplete,
+        )
 
         def field(index: int) -> str:
             value = company[index] if index < len(company) else None

@@ -763,20 +763,24 @@ def report_processing_error(user_id: int, error: Exception) -> None:
 
 def report_missing_company_details(
     user_id: int,
-    error: misc.MissingCompanyDetailsError,
+    missing_fields: list[str] | tuple[str, ...],
 ) -> None:
+    """Предупреждает о пропусках, не останавливая формирование договора."""
+    if not missing_fields:
+        return
     log.warning(
-        "Формирование договора остановлено: не хватает реквизитов | "
+        "Продолжаю формирование договора с неполными реквизитами | "
         "user_id=%s | missing=%s",
         user_id,
-        ", ".join(error.missing_fields),
+        ", ".join(missing_fields),
     )
-    fields = "\n".join(f"• <b>{field}</b>" for field in error.missing_fields)
+    fields = "\n".join(f"• <b>{field}</b>" for field in missing_fields)
     bot.send(
         user_id,
-        "⚠️ Договор пока нельзя сформировать. Не хватает обязательных "
-        f"реквизитов:\n\n{fields}\n\n"
-        "Уточните их у заказчика и отправьте исправленные реквизиты повторно.",
+        "⚠️ В реквизитах не найдены некоторые данные:\n\n"
+        f"{fields}\n\n"
+        "Продолжаю формирование договора. Недостающие поля останутся "
+        "незаполненными, а все найденные данные будут внесены в документ.",
         [control_keyboard()],
     )
 
@@ -862,7 +866,12 @@ def finish_document(
             return False
 
         data = session(user_id)
-        ms.validate_company_data(company_data)
+        missing_fields = ms.validate_company_data(
+            company_data,
+            raise_on_missing=False,
+        )
+        if missing_fields:
+            report_missing_company_details(user_id, missing_fields)
         bot.send(
             user_id,
             "🧾 Реквизиты извлечены. Рассчитываю суммы и заполняю шаблон…",
@@ -887,6 +896,7 @@ def finish_document(
                     number_contract,
                     texted_total,
                     source_path,
+                    allow_incomplete=True,
                 )
             )
         else:
@@ -903,6 +913,7 @@ def finish_document(
                     texted_costs,
                     texted_sending,
                     source_path,
+                    allow_incomplete=True,
                 )
             )
 
@@ -1157,7 +1168,13 @@ def handle_input(user_id: int, message: dict[str, Any]) -> None:
             )
 
     except misc.MissingCompanyDetailsError as exc:
-        report_missing_company_details(user_id, exc)
+        # Защитный fallback: штатный MAX-путь использует нестрогую проверку,
+        # поэтому сюда попадать не должен. Логируем понятное сообщение.
+        report_missing_company_details(user_id, list(exc.missing_fields))
+        log.exception(
+            "Неожиданная строгая проверка реквизитов в MAX | user_id=%s",
+            user_id,
+        )
     except Exception as exc:
         report_processing_error(user_id, exc)
     finally:
