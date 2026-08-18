@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import mimetypes
 import os
@@ -83,6 +84,10 @@ TERMINATION_PERIOD_OPTIONS = [
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 misc.configure_logging(LOGS_DIR, os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("max-bot")
+
+# Профили сотрудников хранятся в /app/logs, потому что эта папка
+# примонтирована с хоста и переживает пересборку Docker-контейнера.
+STAFF_PROFILES_PATH = LOGS_DIR / "staff_profiles.json"
 
 
 def require_env(name: str) -> str:
@@ -272,6 +277,146 @@ def new_session(*, stage: str = "idle") -> dict[str, Any]:
         "stage": stage,
         "scenario_id": uuid4().hex,
     }
+
+
+def load_staff_profiles() -> dict[int, dict[str, str]]:
+    """Загружает закреплённые фамилии сотрудников из постоянного JSON-файла."""
+    if not STAFF_PROFILES_PATH.exists():
+        return {}
+
+    try:
+        raw = json.loads(STAFF_PROFILES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.exception(
+            "Не удалось прочитать профили сотрудников | path=%s",
+            STAFF_PROFILES_PATH,
+        )
+        return {}
+
+    if not isinstance(raw, dict):
+        log.error(
+            "Файл профилей сотрудников имеет неверный формат | path=%s",
+            STAFF_PROFILES_PATH,
+        )
+        return {}
+
+    profiles: dict[int, dict[str, str]] = {}
+    for raw_user_id, raw_profile in raw.items():
+        try:
+            user_id = int(raw_user_id)
+        except (TypeError, ValueError):
+            continue
+
+        if isinstance(raw_profile, str):
+            surname = raw_profile.strip()
+            letters = "".join(char for char in surname if char.isalpha())
+            if len(letters) >= 2:
+                profiles[user_id] = {
+                    "surname": surname,
+                    "code": letters[:2].upper(),
+                }
+            continue
+
+        if not isinstance(raw_profile, dict):
+            continue
+
+        surname = str(raw_profile.get("surname") or "").strip()
+        code = str(raw_profile.get("code") or "").strip().upper()
+        if surname and len(code) >= 2:
+            profiles[user_id] = {
+                "surname": surname,
+                "code": code[:2],
+            }
+
+    return profiles
+
+
+STAFF_PROFILES = load_staff_profiles()
+
+
+def save_staff_profile(user_id: int, surname: str, code: str) -> None:
+    """Надёжно сохраняет фамилию сотрудника, привязанную к его MAX user_id."""
+    STAFF_PROFILES[user_id] = {
+        "surname": surname,
+        "code": code,
+    }
+    payload = {
+        str(profile_user_id): profile
+        for profile_user_id, profile in sorted(STAFF_PROFILES.items())
+    }
+
+    STAFF_PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = STAFF_PROFILES_PATH.with_suffix(".json.tmp")
+    try:
+        temp_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(temp_path, STAFF_PROFILES_PATH)
+    except OSError:
+        temp_path.unlink(missing_ok=True)
+        STAFF_PROFILES.pop(user_id, None)
+        log.exception(
+            "Не удалось сохранить профиль сотрудника | user_id=%s | path=%s",
+            user_id,
+            STAFF_PROFILES_PATH,
+        )
+        raise
+
+    log.info(
+        "Фамилия сотрудника закреплена | user_id=%s | surname=%s | code=%s",
+        user_id,
+        surname,
+        code,
+    )
+
+
+def set_document_identity(data: dict[str, Any], code: str) -> None:
+    """Устанавливает код сотрудника и срок действия для нового договора."""
+    data["lastname"] = code
+    ending = datetime.now() + relativedelta(years=1)
+    data["ending"] = (
+        f"{ending.day} {ms.GENITIVUS[ending.month]} {ending.year} года"
+    )
+
+
+def proceed_after_employee_identity(user_id: int) -> None:
+    """Переходит к вопросам договора после определения сотрудника."""
+    data = session(user_id)
+    if data.get("contract_type") == "ser":
+        data["ser_step"] = 0
+        data["stage"] = "ser_text"
+        bot.send(user_id, SER_QUESTIONS[0][1], [control_keyboard()])
+    else:
+        data["stage"] = "cost"
+        bot.send(
+            user_id,
+            "❔ Введите стоимость разовой услуги",
+            [control_keyboard()],
+        )
+
+
+def apply_saved_employee_identity(user_id: int) -> bool:
+    """Подставляет закреплённую фамилию сотрудника без повторного вопроса."""
+    profile = STAFF_PROFILES.get(user_id)
+    if not profile:
+        return False
+
+    data = session(user_id)
+    set_document_identity(data, profile["code"])
+    log.info(
+        "Использован сохранённый профиль сотрудника | user_id=%s | code=%s",
+        user_id,
+        profile["code"],
+    )
+    bot.send(
+        user_id,
+        "👤 Сотрудник: "
+        f"<b>{profile['surname']}</b>. Код документов: <b>{profile['code']}</b>.",
+        [control_keyboard()],
+    )
+    proceed_after_employee_identity(user_id)
+    return True
 
 
 def session(user_id: int) -> dict[str, Any]:
@@ -809,7 +954,9 @@ def handle_text_stage(user_id: int, text: str) -> bool:
     stage = data["stage"]
 
     if stage == "name":
-        if len(text) < 2 or not any(char.isalpha() for char in text):
+        surname = text.strip()
+        letters = "".join(char for char in surname if char.isalpha())
+        if len(letters) < 2:
             bot.send(
                 user_id,
                 "❌ Фамилия должна содержать не менее двух букв.",
@@ -817,25 +964,26 @@ def handle_text_stage(user_id: int, text: str) -> bool:
             )
             return True
 
-        data["lastname"] = text[:2].upper()
-        ending = datetime.now() + relativedelta(years=1)
-        data["ending"] = (
-            f"{ending.day} {ms.GENITIVUS[ending.month]} {ending.year} года"
-        )
-        log.info("Фамилия принята | user_id=%s", user_id)
+        code = letters[:2].upper()
+        try:
+            save_staff_profile(user_id, surname, code)
+        except OSError:
+            bot.send(
+                user_id,
+                "❌ Не удалось закрепить фамилию сотрудника. "
+                "Попробуйте ещё раз или обратитесь к администратору.",
+                [control_keyboard()],
+            )
+            return True
+
+        set_document_identity(data, code)
         bot.send(
             user_id,
-            f"✅ Фамилия принята. Код документов: <b>{data['lastname']}</b>",
+            "✅ Фамилия закреплена за вашим MAX ID. "
+            f"В дальнейшем спрашивать её не буду. Код документов: <b>{code}</b>",
             [control_keyboard()],
         )
-
-        if data.get("contract_type") == "ser":
-            data["ser_step"] = 0
-            data["stage"] = "ser_text"
-            bot.send(user_id, SER_QUESTIONS[0][1], [control_keyboard()])
-        else:
-            data["stage"] = "cost"
-            bot.send(user_id, "❔ Введите стоимость разовой услуги", [control_keyboard()])
+        proceed_after_employee_identity(user_id)
         return True
 
     if stage == "cost":
@@ -1069,13 +1217,17 @@ def handle_callback(update: dict[str, Any]) -> None:
             return
         is_ser = payload == "contract:ser"
         data["contract_type"] = "ser" if is_ser else "specons"
-        data["stage"] = "name"
         contract_label = "ООО СПЕЦЭНЕРГОРАЗВИТИЕ" if is_ser else "ООО СПЕЦКОНС"
         bot.send(
             user_id,
             f"✅ Выбран тип договора: <b>{contract_label}</b>",
             [control_keyboard()],
         )
+
+        if apply_saved_employee_identity(user_id):
+            return
+
+        data["stage"] = "name"
         bot.send(user_id, START_MESSAGE, [control_keyboard()])
         return
 
