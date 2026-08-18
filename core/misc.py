@@ -1,4 +1,4 @@
-"""Общая бизнес-логика Telegram-бота и будущего HTTP API."""
+Общая бизнес-логика Telegram-бота и будущего HTTP API.
 
 from __future__ import annotations
 
