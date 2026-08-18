@@ -29,6 +29,7 @@ from docx.parts.document import DocumentPart
 DOCM_CONTENT_TYPE = "application/vnd.ms-word.document.macroEnabled.main+xml"
 PartFactory.part_type_for[DOCM_CONTENT_TYPE] = DocumentPart
 
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -154,11 +155,11 @@ class Miscellaneous:
     }
 
     def __init__(
-            self,
-            *,
-            bot_dir: Path | None = None,
-            prompts_dir: Path | None = None,
-            trust_env: bool = True,
+        self,
+        *,
+        bot_dir: Path | None = None,
+        prompts_dir: Path | None = None,
+        trust_env: bool = True,
     ) -> None:
         self.CORE_DIR = Path(__file__).resolve().parent
         self.PROJECT_DIR = self.CORE_DIR.parent
@@ -172,10 +173,10 @@ class Miscellaneous:
         self.DOC_NUMBERS_DIR = self.CORE_DIR / "docs_numers"
         self.COUNT_NUMBERS_DIR = self.CORE_DIR / "counting_numers"
         for directory in (
-                self.USERS_DOCS_DIR,
-                self.DOCS_DIR,
-                self.DOC_NUMBERS_DIR,
-                self.COUNT_NUMBERS_DIR,
+            self.USERS_DOCS_DIR,
+            self.DOCS_DIR,
+            self.DOC_NUMBERS_DIR,
+            self.COUNT_NUMBERS_DIR,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -365,6 +366,8 @@ class Miscellaneous:
                 company[index] = value[0].upper() + value[1:]
 
         return company
+
+
 
     def sent_message_to_ai(self, message: str) -> list[str]:
         text = (message or "").strip()
@@ -680,8 +683,8 @@ class Miscellaneous:
         image = ImageOps.exif_transpose(source)
 
         if (
-                image.width * image.height < self.OCR_MIN_PIXELS
-                or min(image.width, image.height) < self.OCR_MIN_SIDE
+            image.width * image.height < self.OCR_MIN_PIXELS
+            or min(image.width, image.height) < self.OCR_MIN_SIDE
         ):
             raise DocumentExtractionError(
                 "Изображение слишком маленькое для надёжного распознавания. "
@@ -725,11 +728,11 @@ class Miscellaneous:
             len(content),
         )
         return content
-
+    
     def sent_image_to_ai(
-            self,
-            path: str | Path,
-            extension: str | None = None,
+        self,
+        path: str | Path,
+        extension: str | None = None,
     ) -> list[str]:
         del extension  # MIME определяется после нормализации изображения.
         image_path = Path(path)
@@ -939,12 +942,12 @@ class Miscellaneous:
         return result.strip()
 
     def _post_json(
-            self,
-            url: str,
-            headers: dict[str, str],
-            payload: dict[str, Any],
-            *,
-            operation: str,
+        self,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+        *,
+        operation: str,
     ) -> dict[str, Any]:
         started_at = time.monotonic()
         is_ocr = operation == "ocr"
@@ -1040,9 +1043,9 @@ class Miscellaneous:
         )
 
     def get_bot_doc_num(
-            self,
-            user_data: dict[int, dict[str, Any]],
-            user_id: int,
+        self,
+        user_data: dict[int, dict[str, Any]],
+        user_id: int,
     ) -> str:
         return self._get_number(
             user_data,
@@ -1053,9 +1056,9 @@ class Miscellaneous:
         )
 
     def get_bot_count_num(
-            self,
-            user_data: dict[int, dict[str, Any]],
-            user_id: int,
+        self,
+        user_data: dict[int, dict[str, Any]],
+        user_id: int,
     ) -> str:
         return self._get_number(
             user_data,
@@ -1066,12 +1069,12 @@ class Miscellaneous:
         )
 
     def _get_number(
-            self,
-            user_data: dict[int, dict[str, Any]],
-            user_id: int,
-            directory: Path,
-            suffix: str,
-            date_format: str,
+        self,
+        user_data: dict[int, dict[str, Any]],
+        user_id: int,
+        directory: Path,
+        suffix: str,
+        date_format: str,
     ) -> str:
         """
         Возвращает следующий номер и сразу резервирует его.
@@ -1121,10 +1124,10 @@ class Miscellaneous:
         """Определяет ИП исключительно по организационно-правовой форме."""
         normalized = " ".join(str(organization_type or "").casefold().split())
         return (
-                normalized == "ип"
-                or normalized.startswith("ип ")
-                or "индивидуальный предприниматель" in normalized
-                or "индивидуального предпринимателя" in normalized
+            normalized == "ип"
+            or normalized.startswith("ип ")
+            or "индивидуальный предприниматель" in normalized
+            or "индивидуального предпринимателя" in normalized
         )
 
     @staticmethod
@@ -1245,8 +1248,21 @@ class Miscellaneous:
         return f"{full_type} {name}".strip()
 
     @classmethod
-    def validate_company_data(cls, company: list[str | None]) -> None:
-        """Проверяет обязательные реквизиты до резервирования номера договора."""
+    def validate_company_data(
+            cls,
+            company: list[str | None],
+            *,
+            raise_on_missing: bool = True,
+    ) -> list[str]:
+        """
+        Возвращает список отсутствующих обязательных реквизитов.
+
+        По умолчанию сохраняется прежнее строгое поведение: при нехватке
+        реквизитов возбуждается MissingCompanyDetailsError. Интерфейсы,
+        которым нужно сформировать черновик даже из неполных данных (MAX),
+        передают raise_on_missing=False и получают список пропусков без
+        остановки формирования документа.
+        """
 
         def normalized(index: int) -> str:
             if index >= len(company) or company[index] is None:
@@ -1269,17 +1285,21 @@ class Miscellaneous:
         ]
         if missing_fields:
             LOGGER.warning(
-                "ИИ вернул неполные реквизиты | missing=%s",
+                "ИИ вернул неполные реквизиты | missing=%s | strict=%s",
                 ", ".join(missing_fields),
+                raise_on_missing,
             )
-            raise MissingCompanyDetailsError(missing_fields)
+            if raise_on_missing:
+                raise MissingCompanyDetailsError(missing_fields)
+
+        return missing_fields
 
     @classmethod
     def _set_replacement_cell_value(
-            cls,
-            container: Any,
-            value: str,
-            namespaces: dict[str, str],
+        cls,
+        container: Any,
+        value: str,
+        namespaces: dict[str, str],
     ) -> None:
         """
         Записывает значение в колонку «ИНФОРМАЦИЯ ОТ ЗАКАЗЧИКА».
@@ -1295,8 +1315,8 @@ class Miscellaneous:
             # После заполнения Word не должен показывать текст-заполнитель
             # «Выберите элемент.».
             for placeholder in container.xpath(
-                    './w:sdtPr/w:showingPlcHdr',
-                    namespaces=namespaces,
+                './w:sdtPr/w:showingPlcHdr',
+                namespaces=namespaces,
             ):
                 placeholder.getparent().remove(placeholder)
 
@@ -1359,16 +1379,20 @@ class Miscellaneous:
 
     @classmethod
     def _fill_replacement_table(
-            cls,
-            template_path: Path,
-            output_path: Path,
-            replacements: dict[str, Any],
+        cls,
+        template_path: Path,
+        output_path: Path,
+        replacements: dict[str, Any],
+        *,
+        unwrap_input_controls: bool = False,
     ) -> None:
         """
         Создаёт копию исходной таблицы и заполняет ТОЛЬКО колонку 4.
 
-        Значения autozamena_001 ... autozamena_020 в колонке 5
-        остаются буквальным текстом и никогда не заменяются.
+        Значения autozamena_XXX в колонке 5 остаются буквальным текстом
+        и никогда не заменяются. Для шаблона СЭР можно дополнительно
+        развернуть content controls колонки 4 в обычные ячейки, чтобы Word
+        не обрезал значения по ограничениям старых выпадающих списков.
         """
         namespaces = {'w': cls.WORD_NS}
 
@@ -1449,6 +1473,29 @@ class Miscellaneous:
                 # Предпоследняя логическая ячейка — строго колонка
                 # «ИНФОРМАЦИЯ ОТ ЗАКАЗЧИКА / ДАННЫЕ ДЛЯ ЗАМЕНЫ».
                 target_cell = logical_cells[-2]
+
+                # В старом шаблоне СЭР часть ячеек была обёрнута в w:sdt
+                # (comboBox). Word повторно применял ограничения этого поля
+                # при открытии документа и отрезал последний символ у
+                # значений вроде «Генеральный директор», «Устава»,
+                # «ежеквартально» и «за три месяца». В рабочей копии СЭР
+                # превращаем такую ячейку в обычную w:tc до записи значения.
+                if (
+                    unwrap_input_controls
+                    and etree.QName(target_cell).localname == 'sdt'
+                ):
+                    actual_cell = target_cell.find(
+                        './w:sdtContent/w:tc',
+                        namespaces=namespaces,
+                    )
+                    if actual_cell is None:
+                        raise RuntimeError(
+                            f"Не удалось развернуть поле ввода для {key}"
+                        )
+                    plain_cell = deepcopy(actual_cell)
+                    target_cell.getparent().replace(target_cell, plain_cell)
+                    target_cell = plain_cell
+
                 cls._set_replacement_cell_value(
                     target_cell,
                     str(replacements[key]),
@@ -1491,6 +1538,8 @@ class Miscellaneous:
             texted_costs: str,
             texted_total: str,
             way: str | Path | None = None,
+            *,
+            allow_incomplete: bool = False,
     ) -> Path:
         """
         Формирует НЕ договор, а заполненную таблицу автозамен.
@@ -1499,7 +1548,10 @@ class Miscellaneous:
         заполняется только колонка «ИНФОРМАЦИЯ ОТ ЗАКАЗЧИКА».
         Текст autozamena_001 ... autozamena_020 не меняется.
         """
-        self.validate_company_data(company)
+        self.validate_company_data(
+            company,
+            raise_on_missing=not allow_incomplete,
+        )
 
         def field(index: int) -> str:
             value = company[index] if index < len(company) else None
@@ -1523,10 +1575,10 @@ class Miscellaneous:
             value
             for value in (
                 f'Юридический адрес: {field(6)}' if field(6) else '',
-                f'ОГРН {field(12)}' if field(12) else '',
-                f'ИНН {field(5)}' if field(5) else '',
+                f'ОГРН: {field(12)}' if field(12) else '',
+                f'ИНН: {field(5)}' if field(5) else '',
                 (
-                    f'КПП {field(11)}'
+                    f'КПП: {field(11)}'
                     if not is_entrepreneur and field(11)
                     else ''
                 ),
@@ -1537,11 +1589,10 @@ class Miscellaneous:
         banco = '\n'.join(
             value
             for value in (
-                'Полное наименование банка',
-                field(7),
-                f'РС {field(8)}' if field(8) else '',
-                f'КС {field(9)}' if field(9) else '',
-                f'БИК {field(10)}' if field(10) else '',
+                f'Банк: {field(7)}' if field(7) else '',
+                f'Расчетный счет: {field(8)}' if field(8) else '',
+                f'Корр. счет: {field(9)}' if field(9) else '',
+                f'БИК: {field(10)}' if field(10) else '',
             )
             if value
         )
@@ -1602,6 +1653,49 @@ class Miscellaneous:
             output_path,
         )
         return output_path
+    @classmethod
+    def _validate_ser_template_placeholders(cls, template_path: Path) -> None:
+        """Проверяет, что шаблон СЭР использует единую схему autozamena_001..027."""
+        namespaces = {'w': cls.WORD_NS}
+        with ZipFile(template_path, 'r') as archive:
+            try:
+                root = etree.fromstring(archive.read('word/document.xml'))
+            except KeyError as exc:
+                raise RuntimeError(
+                    "В шаблоне СЭР отсутствует word/document.xml"
+                ) from exc
+
+        document_text = ''.join(
+            root.xpath('.//w:t/text()', namespaces=namespaces)
+        )
+        forbidden = [
+            token
+            for token in ('autozamena_F013', 'electron_pochta')
+            if token in document_text
+        ]
+        if forbidden:
+            raise RuntimeError(
+                "В шаблоне СЭР остались устаревшие плейсхолдеры: "
+                + ', '.join(forbidden)
+            )
+
+        expected = {f'autozamena_{index:03d}' for index in range(1, 28)}
+        present = set(re.findall(r'autozamena_\d{3}', document_text))
+        missing = sorted(expected - present)
+        if missing:
+            raise RuntimeError(
+                "В шаблоне СЭР отсутствуют плейсхолдеры: "
+                + ', '.join(missing)
+            )
+
+        # 026/027 должны быть не только в служебной таблице, но и в двух
+        # блоках реквизитов Заказчика (основной договор и соглашение ЭДО).
+        for key in ('autozamena_026', 'autozamena_027'):
+            if document_text.count(key) < 3:
+                raise RuntimeError(
+                    f"Плейсхолдер {key} не подключён ко всем блокам "
+                    "реквизитов Заказчика"
+                )
 
     def bot_insert_req_ser(
             self,
@@ -1611,6 +1705,8 @@ class Miscellaneous:
             numer: str,
             texted_total: str,
             way: str | Path | None = None,
+            *,
+            allow_incomplete: bool = False,
     ) -> Path:
         """
         Формирует таблицу автозамен для договора ООО СПЕЦЭНЕРГОРАЗВИТИЕ.
@@ -1618,7 +1714,10 @@ class Miscellaneous:
         Использует отдельный шаблон 'ООО СПЕЦЭНЕРГОРАЗВИТИЕ.docm' и
         отдельный набор полей user_data['ser_fields'].
         """
-        self.validate_company_data(company)
+        self.validate_company_data(
+            company,
+            raise_on_missing=not allow_incomplete,
+        )
 
         def field(index: int) -> str:
             value = company[index] if index < len(company) else None
@@ -1719,6 +1818,8 @@ class Miscellaneous:
                 f'Не найден шаблон таблицы: {template_path}'
             )
 
+        self._validate_ser_template_placeholders(template_path)
+
         source_id = Path(way).stem if way else uuid4().hex
         output_path = (
                 self.DOCS_DIR
@@ -1729,6 +1830,7 @@ class Miscellaneous:
             template_path,
             output_path,
             replacements,
+            unwrap_input_controls=True,
         )
 
         LOGGER.info(
@@ -1739,3 +1841,4 @@ class Miscellaneous:
             output_path,
         )
         return output_path
+
