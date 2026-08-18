@@ -1366,12 +1366,16 @@ class Miscellaneous:
         template_path: Path,
         output_path: Path,
         replacements: dict[str, Any],
+        *,
+        unwrap_input_controls: bool = False,
     ) -> None:
         """
         Создаёт копию исходной таблицы и заполняет ТОЛЬКО колонку 4.
 
-        Значения autozamena_001 ... autozamena_020 в колонке 5
-        остаются буквальным текстом и никогда не заменяются.
+        Значения autozamena_XXX в колонке 5 остаются буквальным текстом
+        и никогда не заменяются. Для шаблона СЭР можно дополнительно
+        развернуть content controls колонки 4 в обычные ячейки, чтобы Word
+        не обрезал значения по ограничениям старых выпадающих списков.
         """
         namespaces = {'w': cls.WORD_NS}
 
@@ -1452,6 +1456,29 @@ class Miscellaneous:
                 # Предпоследняя логическая ячейка — строго колонка
                 # «ИНФОРМАЦИЯ ОТ ЗАКАЗЧИКА / ДАННЫЕ ДЛЯ ЗАМЕНЫ».
                 target_cell = logical_cells[-2]
+
+                # В старом шаблоне СЭР часть ячеек была обёрнута в w:sdt
+                # (comboBox). Word повторно применял ограничения этого поля
+                # при открытии документа и отрезал последний символ у
+                # значений вроде «Генеральный директор», «Устава»,
+                # «ежеквартально» и «за три месяца». В рабочей копии СЭР
+                # превращаем такую ячейку в обычную w:tc до записи значения.
+                if (
+                    unwrap_input_controls
+                    and etree.QName(target_cell).localname == 'sdt'
+                ):
+                    actual_cell = target_cell.find(
+                        './w:sdtContent/w:tc',
+                        namespaces=namespaces,
+                    )
+                    if actual_cell is None:
+                        raise RuntimeError(
+                            f"Не удалось развернуть поле ввода для {key}"
+                        )
+                    plain_cell = deepcopy(actual_cell)
+                    target_cell.getparent().replace(target_cell, plain_cell)
+                    target_cell = plain_cell
+
                 cls._set_replacement_cell_value(
                     target_cell,
                     str(replacements[key]),
@@ -1526,10 +1553,10 @@ class Miscellaneous:
             value
             for value in (
                 f'Юридический адрес: {field(6)}' if field(6) else '',
-                f'ОГРН {field(12)}' if field(12) else '',
-                f'ИНН {field(5)}' if field(5) else '',
+                f'ОГРН: {field(12)}' if field(12) else '',
+                f'ИНН: {field(5)}' if field(5) else '',
                 (
-                    f'КПП {field(11)}'
+                    f'КПП: {field(11)}'
                     if not is_entrepreneur and field(11)
                     else ''
                 ),
@@ -1540,11 +1567,10 @@ class Miscellaneous:
         banco = '\n'.join(
             value
             for value in (
-                'Полное наименование банка',
-                field(7),
-                f'РС {field(8)}' if field(8) else '',
-                f'КС {field(9)}' if field(9) else '',
-                f'БИК {field(10)}' if field(10) else '',
+                f'Банк: {field(7)}' if field(7) else '',
+                f'Расчетный счет: {field(8)}' if field(8) else '',
+                f'Корр. счет: {field(9)}' if field(9) else '',
+                f'БИК: {field(10)}' if field(10) else '',
             )
             if value
         )
@@ -1605,6 +1631,50 @@ class Miscellaneous:
             output_path,
         )
         return output_path
+    @classmethod
+    def _validate_ser_template_placeholders(cls, template_path: Path) -> None:
+        """Проверяет, что шаблон СЭР использует единую схему autozamena_001..027."""
+        namespaces = {'w': cls.WORD_NS}
+        with ZipFile(template_path, 'r') as archive:
+            try:
+                root = etree.fromstring(archive.read('word/document.xml'))
+            except KeyError as exc:
+                raise RuntimeError(
+                    "В шаблоне СЭР отсутствует word/document.xml"
+                ) from exc
+
+        document_text = ''.join(
+            root.xpath('.//w:t/text()', namespaces=namespaces)
+        )
+        forbidden = [
+            token
+            for token in ('autozamena_F013', 'electron_pochta')
+            if token in document_text
+        ]
+        if forbidden:
+            raise RuntimeError(
+                "В шаблоне СЭР остались устаревшие плейсхолдеры: "
+                + ', '.join(forbidden)
+            )
+
+        expected = {f'autozamena_{index:03d}' for index in range(1, 28)}
+        present = set(re.findall(r'autozamena_\d{3}', document_text))
+        missing = sorted(expected - present)
+        if missing:
+            raise RuntimeError(
+                "В шаблоне СЭР отсутствуют плейсхолдеры: "
+                + ', '.join(missing)
+            )
+
+        # 026/027 должны быть не только в служебной таблице, но и в двух
+        # блоках реквизитов Заказчика (основной договор и соглашение ЭДО).
+        for key in ('autozamena_026', 'autozamena_027'):
+            if document_text.count(key) < 3:
+                raise RuntimeError(
+                    f"Плейсхолдер {key} не подключён ко всем блокам "
+                    "реквизитов Заказчика"
+                )
+
     def bot_insert_req_ser(
             self,
             user_data: dict[int, dict[str, Any]],
@@ -1711,6 +1781,8 @@ class Miscellaneous:
             'autozamena_023': ser_fields.get('visits_frequency', ''),
             'autozamena_024': ser_fields.get('termination_period', ''),
             'autozamena_025': ser_fields.get('email', ''),
+            'autozamena_026': company_req,
+            'autozamena_027': banco,
         }
 
         template_path = self.CORE_DIR / 'ООО СПЕЦЭНЕРГОРАЗВИТИЕ.docm'
@@ -1718,6 +1790,8 @@ class Miscellaneous:
             raise FileNotFoundError(
                 f'Не найден шаблон таблицы: {template_path}'
             )
+
+        self._validate_ser_template_placeholders(template_path)
 
         source_id = Path(way).stem if way else uuid4().hex
         output_path = (
@@ -1729,6 +1803,7 @@ class Miscellaneous:
             template_path,
             output_path,
             replacements,
+            unwrap_input_controls=True,
         )
 
         LOGGER.info(
