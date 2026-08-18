@@ -1,0 +1,11 @@
+requests>=2.31
+python-dateutil>=2.9
+python-docx>=1.1
+docxtpl>=0.17
+python-dotenv>=1.0
+pymupdf>=1.24
+lxml>=5.2
+Pillow>=10.3
+truststore>=0.9
+pyTelegramBotAPI>=4.20
+textract>=1.6
