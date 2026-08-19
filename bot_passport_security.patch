@@ -1,0 +1,127 @@
+--- bot.py
++++ bot.py
+@@ -428,6 +428,12 @@
+             types.InlineKeyboardButton("ООО СПЕЦКОНС", callback_data="contract_specons"),
+             types.InlineKeyboardButton("ООО СПЕЦЭНЕРГОРАЗВИТИЕ", callback_data="contract_ser"),
+         )
++        contract_type_markup.row(
++            types.InlineKeyboardButton(
++                "ПАСПОРТ БЕЗОПАСНОСТИ",
++                callback_data="contract_passport_security",
++            ),
++        )
+         bot.send_message(
+             message.chat.id,
+             "❔ Выберите тип договора",
+@@ -435,7 +441,13 @@
+         )
+ 
+ 
+-@bot.callback_query_handler(func=lambda callback: callback.data in ("contract_specons", "contract_ser"))
++@bot.callback_query_handler(
++    func=lambda callback: callback.data in (
++        "contract_specons",
++        "contract_ser",
++        "contract_passport_security",
++    )
++)
+ @safe_handler
+ def choose_contract_type(callback):
+     bot.answer_callback_query(callback.id)
+@@ -446,10 +458,16 @@
+         show_start_button(callback.message, user_id)
+         return
+ 
+-    is_ser = callback.data == "contract_ser"
+-    user_data[user_id]["contract_type"] = "ser" if is_ser else "specons"
+-
+-    contract_label = "ООО СПЕЦЭНЕРГОРАЗВИТИЕ" if is_ser else "ООО СПЕЦКОНС"
++    contract_types = {
++        "contract_specons": ("specons", "ООО СПЕЦКОНС"),
++        "contract_ser": ("ser", "ООО СПЕЦЭНЕРГОРАЗВИТИЕ"),
++        "contract_passport_security": (
++            "passport_security",
++            "ООО СПЕЦКОНС — ПАСПОРТ БЕЗОПАСНОСТИ",
++        ),
++    }
++    contract_type, contract_label = contract_types[callback.data]
++    user_data[user_id]["contract_type"] = contract_type
+     bot.send_message(
+         chat_id,
+         f"✅ Выбран тип договора: <b>{contract_label}</b>",
+@@ -709,6 +727,24 @@
+     return int(answer)
+ 
+ 
++def send_source_selection(message) -> None:
++    """Показывает единое меню выбора источника реквизитов."""
++    markup = types.InlineKeyboardMarkup()
++    markup.row(
++        types.InlineKeyboardButton("🧾 Документ", callback_data="doc"),
++        types.InlineKeyboardButton("🖼️ Картинка", callback_data="pic"),
++    )
++    markup.row(
++        types.InlineKeyboardButton("📄 PDF-скан", callback_data="pdf"),
++        types.InlineKeyboardButton("📢 Сообщение", callback_data="mes"),
++    )
++    bot.send_message(
++        message.chat.id,
++        "❔ Выберите источник реквизитов",
++        reply_markup=markup,
++    )
++
++
+ @safe_handler
+ def costs(message):
+     if recover_if_requested(message) or not ensure_active_session(message):
+@@ -722,6 +758,9 @@
+         f"✅ Стоимость принята: <b>{value:,} ₽</b>".replace(",", " "),
+         reply_markup=control_keyboard(),
+     )
++    if user_data[message.from_user.id].get("contract_type") == "passport_security":
++        send_source_selection(message)
++        return
+     register_retry(message, complectation, "❔ Введите количество комплектов")
+ 
+ 
+@@ -743,20 +782,7 @@
+         reply_markup=control_keyboard(),
+     )
+ 
+-    markup = types.InlineKeyboardMarkup()
+-    markup.row(
+-        types.InlineKeyboardButton("🧾 Документ", callback_data="doc"),
+-        types.InlineKeyboardButton("🖼️ Картинка", callback_data="pic"),
+-    )
+-    markup.row(
+-        types.InlineKeyboardButton("📄 PDF-скан", callback_data="pdf"),
+-        types.InlineKeyboardButton("📢 Сообщение", callback_data="mes"),
+-    )
+-    bot.send_message(
+-        message.chat.id,
+-        "❔ Выберите источник реквизитов",
+-        reply_markup=markup,
+-    )
++    send_source_selection(message)
+ 
+ 
+ @bot.callback_query_handler(func=lambda callback: True)
+@@ -838,6 +864,18 @@
+                 texted_total,
+                 source_path,
+             )
++        elif user_data[user_id].get("contract_type") == "passport_security":
++            numer_count = ms.get_bot_count_num(user_data, user_id)
++            texted_costs = ms.integer_texted(user_data[user_id]["cost"])
++            local_doc = ms.bot_insert_req_passport_security(
++                user_data,
++                user_id,
++                company_data,
++                numer_contract,
++                numer_count,
++                texted_costs,
++                source_path,
++            )
+         else:
+             numer_count = ms.get_bot_count_num(user_data, user_id)
+             texted_costs = ms.integer_texted(user_data[user_id]["cost"])
