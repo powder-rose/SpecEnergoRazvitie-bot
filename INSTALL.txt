@@ -1,0 +1,17 @@
+НОВЫЙ ШАБЛОН: ООО СПЕЦКОНС — ПАСПОРТ БЕЗОПАСНОСТИ
+
+Заменить/добавить в репозитории:
+1. max.py
+2. core/misc.py
+3. core/ООО СПЕЦКОНС_ПАСПОРТ БЕЗОПАСНОСТИ.docm
+
+После push в master на сервере:
+
+cd ~/SpecEnergoRazvitie-bot
+git fetch origin
+git checkout origin/master -- max.py core/misc.py "core/ООО СПЕЦКОНС_ПАСПОРТ БЕЗОПАСНОСТИ.docm"
+docker compose up -d --build max-bot
+docker logs --tail 100 max-bot
+
+Проверка наличия нового шаблона внутри контейнера:
+docker exec max-bot ls -lh "/app/core/ООО СПЕЦКОНС_ПАСПОРТ БЕЗОПАСНОСТИ.docm"

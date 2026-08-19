@@ -487,6 +487,9 @@ def contract_type_keyboard() -> dict[str, Any]:
                 ("ООО СПЕЦКОНС", "contract:specons"),
                 ("ООО СПЕЦЭНЕРГОРАЗВИТИЕ", "contract:ser"),
             ],
+            [
+                ("ПАСПОРТ БЕЗОПАСНОСТИ", "contract:passport_security"),
+            ],
             [(RESTART_BUTTON_TEXT, "restart")],
         ]
     )
@@ -899,6 +902,21 @@ def finish_document(
                     allow_incomplete=True,
                 )
             )
+        elif data.get("contract_type") == "passport_security":
+            number_invoice = ms.get_bot_count_num(user_data, user_id)
+            texted_costs = ms.integer_texted(data["cost"])
+            local_doc = Path(
+                ms.bot_insert_req_passport_security(
+                    user_data,
+                    user_id,
+                    company_data,
+                    number_contract,
+                    number_invoice,
+                    texted_costs,
+                    source_path,
+                    allow_incomplete=True,
+                )
+            )
         else:
             number_invoice = ms.get_bot_count_num(user_data, user_id)
             texted_costs = ms.integer_texted(data["cost"])
@@ -1007,12 +1025,15 @@ def handle_text_stage(user_id: int, text: str) -> bool:
             return True
         value = int(text)
         data["cost"] = value
-        data["stage"] = "complects"
         bot.send(
             user_id,
             f"✅ Стоимость принята: <b>{value:,} ₽</b>".replace(",", " "),
             [control_keyboard()],
         )
+        if data.get("contract_type") == "passport_security":
+            ask_source(user_id)
+            return True
+        data["stage"] = "complects"
         bot.send(user_id, "❔ Введите количество комплектов", [control_keyboard()])
         return True
 
@@ -1225,16 +1246,25 @@ def handle_callback(update: dict[str, Any]) -> None:
 
     data = session(user_id)
 
-    if payload in {"contract:specons", "contract:ser"}:
+    if payload in {
+        "contract:specons",
+        "contract:ser",
+        "contract:passport_security",
+    }:
         if data.get("stage") != "contract_type":
             show_start_menu(
                 user_id,
                 "⚠️ Этот выбор относится к завершённому сценарию. Нажмите «Начать».",
             )
             return
-        is_ser = payload == "contract:ser"
-        data["contract_type"] = "ser" if is_ser else "specons"
-        contract_label = "ООО СПЕЦЭНЕРГОРАЗВИТИЕ" if is_ser else "ООО СПЕЦКОНС"
+        contract_type = payload.removeprefix("contract:")
+        data["contract_type"] = contract_type
+        contract_labels = {
+            "specons": "ООО СПЕЦКОНС",
+            "ser": "ООО СПЕЦЭНЕРГОРАЗВИТИЕ",
+            "passport_security": "ООО СПЕЦКОНС — ПАСПОРТ БЕЗОПАСНОСТИ",
+        }
+        contract_label = contract_labels[contract_type]
         bot.send(
             user_id,
             f"✅ Выбран тип договора: <b>{contract_label}</b>",
