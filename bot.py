@@ -460,10 +460,7 @@ def choose_contract_type(callback):
 
 
 SER_QUESTIONS = [
-    ("invoice_number", "❔ Введите номер счёта"),
-    ("invoice_date", "❔ Введите дату счёта"),
     ("cost_month", "❔ Введите стоимость обслуживания в месяц"),
-    ("advance", "❔ Введите сумму аванса"),
     ("object_address", "❔ Введите адрес объекта"),
     ("object_name", "❔ Введите наименование объекта"),
     ("service_period", "❔ Введите период тех. обслуживания"),
