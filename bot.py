@@ -428,12 +428,6 @@ def landing(message):
             types.InlineKeyboardButton("ООО СПЕЦКОНС", callback_data="contract_specons"),
             types.InlineKeyboardButton("ООО СПЕЦЭНЕРГОРАЗВИТИЕ", callback_data="contract_ser"),
         )
-        contract_type_markup.row(
-            types.InlineKeyboardButton(
-                "ПАСПОРТ БЕЗОПАСНОСТИ",
-                callback_data="contract_passport_security",
-            ),
-        )
         bot.send_message(
             message.chat.id,
             "❔ Выберите тип договора",
@@ -441,13 +435,7 @@ def landing(message):
         )
 
 
-@bot.callback_query_handler(
-    func=lambda callback: callback.data in (
-        "contract_specons",
-        "contract_ser",
-        "contract_passport_security",
-    )
-)
+@bot.callback_query_handler(func=lambda callback: callback.data in ("contract_specons", "contract_ser"))
 @safe_handler
 def choose_contract_type(callback):
     bot.answer_callback_query(callback.id)
@@ -458,32 +446,111 @@ def choose_contract_type(callback):
         show_start_button(callback.message, user_id)
         return
 
-    contract_types = {
-        "contract_specons": ("specons", "ООО СПЕЦКОНС"),
-        "contract_ser": ("ser", "ООО СПЕЦЭНЕРГОРАЗВИТИЕ"),
-        "contract_passport_security": (
-            "passport_security",
-            "ООО СПЕЦКОНС — ПАСПОРТ БЕЗОПАСНОСТИ",
-        ),
-    }
-    contract_type, contract_label = contract_types[callback.data]
-    user_data[user_id]["contract_type"] = contract_type
+    is_ser = callback.data == "contract_ser"
+    user_data[user_id]["contract_type"] = "ser" if is_ser else "specons"
+
+    contract_label = "ООО СПЕЦЭНЕРГОРАЗВИТИЕ" if is_ser else "ООО СПЕЦКОНС"
     bot.send_message(
         chat_id,
         f"✅ Выбран тип договора: <b>{contract_label}</b>",
         reply_markup=control_keyboard(),
     )
     bot.send_message(chat_id, start_message, reply_markup=control_keyboard())
-    bot.register_next_step_handler(callback.message, yourname)
+    ask_surname(callback.message)
 
+
+# ---------------------------------------------------------------------------
+# Фамилия: готовые варианты кнопками + возможность вписать свою
+# ---------------------------------------------------------------------------
+
+SURNAME_OPTIONS = ["Яшенина", "Сиротская", "Власова", "Лосева"]
+
+
+def apply_surname(message, name: str) -> None:
+    """Проверяет и сохраняет фамилию (код документов — первые 2 буквы),
+    затем ведёт сценарий дальше в зависимости от типа договора."""
+    user_id = message.from_user.id
+    name = (name or "").strip()
+    if len(name) < 2 or not any(char.isalpha() for char in name):
+        LOGGER.warning("Некорректная фамилия | user_id=%s", user_id)
+        register_retry(
+            message,
+            yourname,
+            "❌ Фамилия должна содержать не менее двух букв.",
+        )
+        return
+
+    user_data[user_id]["lastname"] = name[:2].upper()
+    now_plus = datetime.now() + relativedelta(years=1)
+    user_data[user_id]["ending"] = (
+        f"{now_plus.day} {ms.GENITIVUS[now_plus.month]} "
+        f"{now_plus.year} года"
+    )
+    LOGGER.info("Фамилия принята | user_id=%s", user_id)
+    bot.send_message(
+        message.chat.id,
+        f"✅ Фамилия принята. Код документов: "
+        f"<b>{user_data[user_id]['lastname']}</b>",
+        reply_markup=control_keyboard(),
+    )
+    if user_data[user_id].get("contract_type") == "ser":
+        ask_cost_month(message)
+    else:
+        register_retry(message, costs, "❔ Введите стоимость разовой услуги")
+
+
+@safe_handler
+def yourname(message):
+    if recover_if_requested(message) or not ensure_active_session(message):
+        return
+    apply_surname(message, message.text or "")
+
+
+def ask_surname(message) -> None:
+    markup = types.InlineKeyboardMarkup()
+    for option in SURNAME_OPTIONS:
+        markup.add(types.InlineKeyboardButton(option, callback_data=f"surname_{option}"))
+    markup.add(types.InlineKeyboardButton("✏️ Своя фамилия", callback_data="surname_custom"))
+    bot.send_message(message.chat.id, "❔ Выберите фамилию", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith("surname_"))
+@safe_handler
+def choose_surname(callback):
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    option = callback.data.removeprefix("surname_")
+
+    if option == "custom":
+        bot.send_message(chat_id, "❔ Введите фамилию", reply_markup=control_keyboard())
+        replace_next_step(callback.message, yourname)
+        return
+
+    apply_surname(callback.message, option)
+
+
+# ---------------------------------------------------------------------------
+# Сценарий для ООО СПЕЦЭНЕРГОРАЗВИТИЕ
+# ---------------------------------------------------------------------------
 
 SER_QUESTIONS = [
-    ("cost_month", "❔ Введите стоимость обслуживания в месяц"),
     ("object_address", "❔ Введите адрес объекта"),
     ("object_name", "❔ Введите наименование объекта"),
-    ("service_period", "❔ Введите период тех. обслуживания"),
+    (
+        "service_period",
+        "❔ Введите период тех. обслуживания "
+        "(например: май 2024, июнь 2024, июль 2024)",
+    ),
     ("email", "❔ Введите электронную почту заказчика"),
 ]
+
+COST_MONTH_OPTIONS = ["4200", "5200", "8300", "9500", "19900"]
 
 MONTHS_COUNT_OPTIONS = ["3", "2", "1"]
 
@@ -532,17 +599,95 @@ def ask_ser_field(message, step_index: int) -> None:
     replace_next_step(sent, handler)
 
 
+# ---------------------------------------------------------------------------
+# Стоимость обслуживания в месяц: готовые суммы кнопками + свой вариант
+# ---------------------------------------------------------------------------
+
+def ask_cost_month(message) -> None:
+    markup = types.InlineKeyboardMarkup()
+    for option in COST_MONTH_OPTIONS:
+        markup.add(
+            types.InlineKeyboardButton(f"{option} ₽", callback_data=f"costmonth_{option}")
+        )
+    markup.add(types.InlineKeyboardButton("✏️ Свой вариант", callback_data="costmonth_custom"))
+    bot.send_message(
+        message.chat.id,
+        "❔ Выберите стоимость обслуживания в месяц",
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith("costmonth_"))
+@safe_handler
+def choose_cost_month(callback):
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    option = callback.data.removeprefix("costmonth_")
+
+    if option == "custom":
+        bot.send_message(
+            chat_id,
+            "❔ Введите свою стоимость обслуживания в месяц",
+            reply_markup=control_keyboard(),
+        )
+        replace_next_step(callback.message, receive_custom_cost_month)
+        return
+
+    user_data[user_id].setdefault("ser_fields", {})["cost_month"] = option
+    bot.send_message(
+        chat_id,
+        f"✅ Стоимость обслуживания: <b>{option} ₽</b>",
+        reply_markup=control_keyboard(),
+    )
+    ask_ser_field(callback.message, 0)
+
+
+def receive_custom_cost_month(message) -> None:
+    if recover_if_requested(message) or not ensure_active_session(message):
+        return
+    value = parse_non_negative_integer(message, receive_custom_cost_month)
+    if value is None:
+        return
+    user_data[message.from_user.id].setdefault("ser_fields", {})["cost_month"] = str(value)
+    bot.send_message(
+        message.chat.id,
+        f"✅ Стоимость обслуживания: <b>{value} ₽</b>",
+        reply_markup=control_keyboard(),
+    )
+    ask_ser_field(message, 0)
+
+
+# ---------------------------------------------------------------------------
+# Количество месяцев обслуживания: кнопки 3/2/1 + свой вариант
+# ---------------------------------------------------------------------------
+
 def finish_ser_fields(message) -> None:
     markup = types.InlineKeyboardMarkup()
     for option in MONTHS_COUNT_OPTIONS:
         markup.add(
             types.InlineKeyboardButton(option, callback_data=f"months_{option}")
         )
+    markup.add(types.InlineKeyboardButton("✏️ Свой вариант", callback_data="months_custom"))
     bot.send_message(
         message.chat.id,
         "❔ Выберите количество месяцев обслуживания",
         reply_markup=markup,
     )
+
+
+def proceed_after_months_count(message, chat_id, option) -> None:
+    bot.send_message(
+        chat_id,
+        f"✅ Количество месяцев: <b>{option}</b>",
+        reply_markup=control_keyboard(),
+    )
+    ask_advance(message)
 
 
 @bot.callback_query_handler(func=lambda callback: callback.data.startswith("months_"))
@@ -557,24 +702,92 @@ def choose_months_count(callback):
         return
 
     option = callback.data.removeprefix("months_")
+
+    if option == "custom":
+        bot.send_message(
+            chat_id,
+            "❔ Введите количество месяцев обслуживания",
+            reply_markup=control_keyboard(),
+        )
+        replace_next_step(callback.message, receive_custom_months_count)
+        return
+
     user_data[user_id].setdefault("ser_fields", {})["months_count"] = option
+    proceed_after_months_count(callback.message, chat_id, option)
 
-    bot.send_message(
-        chat_id,
-        f"✅ Количество месяцев: <b>{option}</b>",
-        reply_markup=control_keyboard(),
-    )
 
+def receive_custom_months_count(message) -> None:
+    if recover_if_requested(message) or not ensure_active_session(message):
+        return
+    value = parse_non_negative_integer(message, receive_custom_months_count)
+    if value is None:
+        return
+    option = str(value)
+    user_data[message.from_user.id].setdefault("ser_fields", {})["months_count"] = option
+    proceed_after_months_count(message, message.chat.id, option)
+
+
+# ---------------------------------------------------------------------------
+# Аванс: 100% кнопкой или свой вариант
+# ---------------------------------------------------------------------------
+
+def ask_advance(message) -> None:
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("100%", callback_data="advance_100%"))
+    markup.add(types.InlineKeyboardButton("✏️ Свой вариант", callback_data="advance_custom"))
+    bot.send_message(message.chat.id, "❔ Выберите размер аванса", reply_markup=markup)
+
+
+def ask_advance_period(message) -> None:
     markup = types.InlineKeyboardMarkup()
     for advperiod_option in ADVANCE_PERIOD_OPTIONS:
         markup.add(
             types.InlineKeyboardButton(advperiod_option, callback_data=f"advperiod_{advperiod_option}")
         )
+    bot.send_message(message.chat.id, "❔ Выберите аванс за период", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data.startswith("advance_"))
+@safe_handler
+def choose_advance(callback):
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    option = callback.data.removeprefix("advance_")
+
+    if option == "custom":
+        bot.send_message(chat_id, "❔ Введите размер аванса", reply_markup=control_keyboard())
+        replace_next_step(callback.message, receive_custom_advance)
+        return
+
+    user_data[user_id].setdefault("ser_fields", {})["advance"] = option
     bot.send_message(
         chat_id,
-        "❔ Выберите аванс за период",
-        reply_markup=markup,
+        f"✅ Аванс: <b>{option}</b>",
+        reply_markup=control_keyboard(),
     )
+    ask_advance_period(callback.message)
+
+
+def receive_custom_advance(message) -> None:
+    if recover_if_requested(message) or not ensure_active_session(message):
+        return
+    value = (message.text or "").strip()
+    if not value:
+        register_retry(message, receive_custom_advance, "❌ Значение не может быть пустым.")
+        return
+    user_data[message.from_user.id].setdefault("ser_fields", {})["advance"] = value
+    bot.send_message(
+        message.chat.id,
+        f"✅ Аванс: <b>{value}</b>",
+        reply_markup=control_keyboard(),
+    )
+    ask_advance_period(message)
 
 
 @bot.callback_query_handler(func=lambda callback: callback.data.startswith("advperiod_"))
@@ -678,40 +891,6 @@ def choose_termination_period(callback):
     )
 
 
-@safe_handler
-def yourname(message):
-    if recover_if_requested(message) or not ensure_active_session(message):
-        return
-    user_id = message.from_user.id
-    name = (message.text or "").strip()
-    if len(name) < 2 or not any(char.isalpha() for char in name):
-        LOGGER.warning("Некорректная фамилия | user_id=%s", user_id)
-        register_retry(
-            message,
-            yourname,
-            "❌ Фамилия должна содержать не менее двух букв.",
-        )
-        return
-
-    user_data[user_id]["lastname"] = name[:2].upper()
-    now_plus = datetime.now() + relativedelta(years=1)
-    user_data[user_id]["ending"] = (
-        f"{now_plus.day} {ms.GENITIVUS[now_plus.month]} "
-        f"{now_plus.year} года"
-    )
-    LOGGER.info("Фамилия принята | user_id=%s", user_id)
-    bot.send_message(
-        message.chat.id,
-        f"✅ Фамилия принята. Код документов: "
-        f"<b>{user_data[user_id]['lastname']}</b>",
-        reply_markup=control_keyboard(),
-    )
-    if user_data[user_id].get("contract_type") == "ser":
-        ask_ser_field(message, 0)
-    else:
-        register_retry(message, costs, "❔ Введите стоимость разовой услуги")
-
-
 def parse_non_negative_integer(message, retry_handler: Callable) -> int | None:
     answer = (message.text or "").strip()
     if not answer.isdigit():
@@ -722,24 +901,6 @@ def parse_non_negative_integer(message, retry_handler: Callable) -> int | None:
         )
         return None
     return int(answer)
-
-
-def send_source_selection(message) -> None:
-    """Показывает единое меню выбора источника реквизитов."""
-    markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("🧾 Документ", callback_data="doc"),
-        types.InlineKeyboardButton("🖼️ Картинка", callback_data="pic"),
-    )
-    markup.row(
-        types.InlineKeyboardButton("📄 PDF-скан", callback_data="pdf"),
-        types.InlineKeyboardButton("📢 Сообщение", callback_data="mes"),
-    )
-    bot.send_message(
-        message.chat.id,
-        "❔ Выберите источник реквизитов",
-        reply_markup=markup,
-    )
 
 
 @safe_handler
@@ -755,9 +916,6 @@ def costs(message):
         f"✅ Стоимость принята: <b>{value:,} ₽</b>".replace(",", " "),
         reply_markup=control_keyboard(),
     )
-    if user_data[message.from_user.id].get("contract_type") == "passport_security":
-        send_source_selection(message)
-        return
     register_retry(message, complectation, "❔ Введите количество комплектов")
 
 
@@ -779,7 +937,20 @@ def complectation(message):
         reply_markup=control_keyboard(),
     )
 
-    send_source_selection(message)
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("🧾 Документ", callback_data="doc"),
+        types.InlineKeyboardButton("🖼️ Картинка", callback_data="pic"),
+    )
+    markup.row(
+        types.InlineKeyboardButton("📄 PDF-скан", callback_data="pdf"),
+        types.InlineKeyboardButton("📢 Сообщение", callback_data="mes"),
+    )
+    bot.send_message(
+        message.chat.id,
+        "❔ Выберите источник реквизитов",
+        reply_markup=markup,
+    )
 
 
 @bot.callback_query_handler(func=lambda callback: True)
@@ -859,18 +1030,6 @@ def build_and_send_contract(
                 company_data,
                 numer_contract,
                 texted_total,
-                source_path,
-            )
-        elif user_data[user_id].get("contract_type") == "passport_security":
-            numer_count = ms.get_bot_count_num(user_data, user_id)
-            texted_costs = ms.integer_texted(user_data[user_id]["cost"])
-            local_doc = ms.bot_insert_req_passport_security(
-                user_data,
-                user_id,
-                company_data,
-                numer_contract,
-                numer_count,
-                texted_costs,
                 source_path,
             )
         else:
