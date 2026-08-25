@@ -466,10 +466,9 @@ def choose_contract_type(callback):
 SURNAME_OPTIONS = ["Яшенина", "Сиротская", "Власова", "Лосева"]
 
 
-def apply_surname(message, name: str) -> None:
+def apply_surname(message, user_id: int, name: str) -> None:
     """Проверяет и сохраняет фамилию (код документов — первые 2 буквы),
     затем ведёт сценарий дальше в зависимости от типа договора."""
-    user_id = message.from_user.id
     name = (name or "").strip()
     if len(name) < 2 or not any(char.isalpha() for char in name):
         LOGGER.warning("Некорректная фамилия | user_id=%s", user_id)
@@ -503,7 +502,7 @@ def apply_surname(message, name: str) -> None:
 def yourname(message):
     if recover_if_requested(message) or not ensure_active_session(message):
         return
-    apply_surname(message, message.text or "")
+    apply_surname(message, message.from_user.id, message.text or "")
 
 
 def ask_surname(message) -> None:
@@ -532,7 +531,7 @@ def choose_surname(callback):
         replace_next_step(callback.message, yourname)
         return
 
-    apply_surname(callback.message, option)
+    apply_surname(callback.message, user_id, option)
 
 
 # ---------------------------------------------------------------------------
@@ -733,7 +732,7 @@ def receive_custom_months_count(message) -> None:
 
 def ask_advance(message) -> None:
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("100%", callback_data="advance_100%"))
+    markup.add(types.InlineKeyboardButton("100%", callback_data="advance_100"))
     markup.add(types.InlineKeyboardButton("✏️ Свой вариант", callback_data="advance_custom"))
     bot.send_message(message.chat.id, "❔ Выберите размер аванса", reply_markup=markup)
 
@@ -768,7 +767,7 @@ def choose_advance(callback):
     user_data[user_id].setdefault("ser_fields", {})["advance"] = option
     bot.send_message(
         chat_id,
-        f"✅ Аванс: <b>{option}</b>",
+        f"✅ Аванс: <b>{option}%</b>",
         reply_markup=control_keyboard(),
     )
     ask_advance_period(callback.message)
@@ -777,14 +776,14 @@ def choose_advance(callback):
 def receive_custom_advance(message) -> None:
     if recover_if_requested(message) or not ensure_active_session(message):
         return
-    value = (message.text or "").strip()
+    value = (message.text or "").strip().rstrip("%").strip()
     if not value:
         register_retry(message, receive_custom_advance, "❌ Значение не может быть пустым.")
         return
     user_data[message.from_user.id].setdefault("ser_fields", {})["advance"] = value
     bot.send_message(
         message.chat.id,
-        f"✅ Аванс: <b>{value}</b>",
+        f"✅ Аванс: <b>{value}%</b>",
         reply_markup=control_keyboard(),
     )
     ask_advance_period(message)
