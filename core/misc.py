@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import base64
+import calendar
 from copy import deepcopy
 import logging
 import os
@@ -122,6 +123,22 @@ class Miscellaneous:
         11: "ноября",
         12: "декабря",
     }
+
+    NOMINATIVUS = {
+        1: "январь",
+        2: "февраль",
+        3: "март",
+        4: "апрель",
+        5: "май",
+        6: "июнь",
+        7: "июль",
+        8: "август",
+        9: "сентябрь",
+        10: "октябрь",
+        11: "ноябрь",
+        12: "декабрь",
+    }
+
     COMPANY_FIELDS = {
         0: "организационно-правовая форма",
         1: "должность руководителя в родительном падеже",
@@ -1528,6 +1545,57 @@ class Miscellaneous:
                     )
                     target_archive.writestr(item, data)
 
+    @classmethod
+    def _add_months(cls, year: int, month: int, delta: int) -> tuple[int, int]:
+        total = (month - 1) + delta
+        return year + total // 12, total % 12 + 1
+
+    @classmethod
+    def _build_ser_service_period(cls, start: datetime, months_count_raw: str) -> str:
+        try:
+            months_count = int(months_count_raw)
+        except (TypeError, ValueError):
+            months_count = 0
+        if months_count <= 0:
+            return ''
+
+        day, month, year = start.day, start.month, start.year
+
+        if day <= 15:
+            first_end_year, first_end_month = year, month
+        else:
+            first_end_year, first_end_month = cls._add_months(year, month, 1)
+
+        last_day = calendar.monthrange(first_end_year, first_end_month)[1]
+        first_segment = (
+            f'С {day} {cls.GENITIVUS[month]} '
+            f'по {last_day} {cls.GENITIVUS[first_end_month]} '
+            f'{first_end_year} года'
+        )
+
+        remaining = months_count - 1
+        if remaining <= 0:
+            return first_segment
+
+        trailing: list[tuple[int, str]] = []
+        cur_year, cur_month = first_end_year, first_end_month
+        for _ in range(remaining):
+            cur_year, cur_month = cls._add_months(cur_year, cur_month, 1)
+            trailing.append((cur_year, cls.NOMINATIVUS[cur_month]))
+
+        groups: list[tuple[list[str], int]] = []
+        for yr, name in trailing:
+            if groups and groups[-1][1] == yr:
+                groups[-1][0].append(name)
+            else:
+                groups.append(([name], yr))
+
+        trailing_text = ', '.join(
+            f"{', '.join(names)} {yr} года" for names, yr in groups
+        )
+
+        return f'{first_segment}, за {trailing_text}'
+
     def bot_insert_req(
             self,
             user_data: dict[int, dict[str, Any]],
@@ -1917,7 +1985,7 @@ class Miscellaneous:
             'autozamena_019': ser_fields.get('advance_period', ''),
             'autozamena_020': ser_fields.get('object_address', ''),
             'autozamena_021': ser_fields.get('object_name', ''),
-            'autozamena_022': ser_fields.get('service_period', ''),
+            'autozamena_022': self._build_ser_service_period(now, months_count_raw),
             'autozamena_023': ser_fields.get('visits_frequency', ''),
             'autozamena_024': ser_fields.get('termination_period', ''),
             'autozamena_025': ser_fields.get('email', ''),
