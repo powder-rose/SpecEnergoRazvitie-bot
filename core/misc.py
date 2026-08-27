@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import base64
 from copy import deepcopy
+import json
 import logging
 import os
 import re
@@ -108,6 +109,15 @@ class Miscellaneous:
     OCR_PDF_DPI = 200
     WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
+    # Тариф YandexGPT Pro (модель "yandexgpt/latest"), синхронный режим —
+    # цена единая за суммарные (вход + выход) токены, раздельной цены
+    # на входные/выходные токены у Yandex, в отличие от OpenAI, нет.
+    YANDEXGPT_PRICE_PER_1K_TOKENS = 1.20
+    # Yandex OCR, модель "page" (распознавание печатного текста) — цена
+    # за страницу/изображение.
+    YANDEX_OCR_PRICE_PER_PAGE = 0.13
+    AI_USAGE_RECENT_LIMIT = 5
+
     GENITIVUS = {
         1: "января",
         2: "февраля",
@@ -186,11 +196,14 @@ class Miscellaneous:
         self.DOCS_DIR = self.BOT_DIR / "docs"
         self.DOC_NUMBERS_DIR = self.CORE_DIR / "docs_numers"
         self.COUNT_NUMBERS_DIR = self.CORE_DIR / "counting_numers"
+        self.AI_USAGE_DIR = self.CORE_DIR / "ai_usage"
+        self.AI_USAGE_LOG_PATH = self.AI_USAGE_DIR / "ai_usage.jsonl"
         for directory in (
             self.USERS_DOCS_DIR,
             self.DOCS_DIR,
             self.DOC_NUMBERS_DIR,
             self.COUNT_NUMBERS_DIR,
+            self.AI_USAGE_DIR,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -1046,9 +1059,179 @@ class Miscellaneous:
                 attempts,
                 time.monotonic() - attempt_started_at,
             )
+            self._record_ai_usage(operation, data)
             return data
 
         raise AIServiceError("Не удалось выполнить запрос к сервису ИИ")
+
+    def _record_ai_usage(self, operation: str, data: dict[str, Any]) -> None:
+        """Фиксирует стоимость одного успешного обращения к Yandex API."""
+        try:
+            if operation == "yandexgpt":
+                usage = (data.get("result") or {}).get("usage") or {}
+                try:
+                    input_tokens = int(usage.get("inputTextTokens", 0) or 0)
+                except (TypeError, ValueError):
+                    input_tokens = 0
+                try:
+                    output_tokens = int(usage.get("completionTokens", 0) or 0)
+                except (TypeError, ValueError):
+                    output_tokens = 0
+                total_tokens = input_tokens + output_tokens
+                price = total_tokens / 1000 * self.YANDEXGPT_PRICE_PER_1K_TOKENS
+                self._log_ai_usage(
+                    "yandexgpt",
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    price=price,
+                )
+            elif operation == "ocr":
+                self._log_ai_usage(
+                    "ocr",
+                    pages=1,
+                    price=self.YANDEX_OCR_PRICE_PER_PAGE,
+                )
+        except Exception:
+            # Статистика расходов не должна ронять основной сценарий бота.
+            LOGGER.exception(
+                "Не удалось учесть стоимость обращения к ИИ | operation=%s",
+                operation,
+            )
+
+    def _log_ai_usage(
+        self,
+        operation: str,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        pages: int = 0,
+        price: float,
+    ) -> None:
+        """
+        Дописывает одну запись в общий журнал расходов на ИИ.
+
+        Файл может одновременно писаться Telegram- и MAX-ботом (два разных
+        процесса/контейнера с общим volume), поэтому запись делается одним
+        системным вызовом os.write в режиме O_APPEND — на Linux такая запись
+        атомарна, если её размер не превышает PIPE_BUF, так что чужая строка
+        не может «влезть» посередине и испортить журнал.
+        """
+        entry = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "operation": operation,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "pages": pages,
+            "price": round(price, 4),
+        }
+        line = (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
+        try:
+            fd = os.open(
+                self.AI_USAGE_LOG_PATH,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                0o644,
+            )
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
+        except OSError:
+            LOGGER.exception("Не удалось записать статистику расходов на ИИ")
+
+    def get_ai_usage_stats(
+        self,
+        recent_limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Возвращает агрегированную статистику расходов на ИИ (оба бота)."""
+        if recent_limit is None:
+            recent_limit = self.AI_USAGE_RECENT_LIMIT
+
+        entries: list[dict[str, Any]] = []
+        try:
+            with self.AI_USAGE_LOG_PATH.open("r", encoding="utf-8") as fh:
+                for raw_line in fh:
+                    raw_line = raw_line.strip()
+                    if not raw_line:
+                        continue
+                    try:
+                        entries.append(json.loads(raw_line))
+                    except ValueError:
+                        continue
+        except FileNotFoundError:
+            pass
+
+        now = datetime.now()
+        today = now.date()
+
+        today_total = 0.0
+        today_count = 0
+        month_total = 0.0
+        month_count = 0
+        all_total = 0.0
+
+        for entry in entries:
+            try:
+                ts = datetime.fromisoformat(str(entry.get("ts", "")))
+            except ValueError:
+                continue
+            price = float(entry.get("price", 0) or 0)
+            all_total += price
+            if ts.date() == today:
+                today_total += price
+                today_count += 1
+            if (ts.year, ts.month) == (now.year, now.month):
+                month_total += price
+                month_count += 1
+
+        recent = list(reversed(entries[-recent_limit:])) if entries else []
+
+        return {
+            "today_total": today_total,
+            "today_count": today_count,
+            "month_total": month_total,
+            "month_count": month_count,
+            "all_total": all_total,
+            "all_count": len(entries),
+            "recent": recent,
+        }
+
+    def render_ai_usage_report(self, recent_limit: int | None = None) -> str:
+        """Готовый HTML-текст статистики расходов на ИИ для бота."""
+        stats = self.get_ai_usage_stats(recent_limit=recent_limit)
+        lines = [
+            "<b>📊 Расходы на ИИ-сервисы (YandexGPT + OCR)</b>",
+            "",
+            f"Сегодня: {stats['today_total']:.2f} ₽ "
+            f"({stats['today_count']} запросов)",
+            f"За месяц: {stats['month_total']:.2f} ₽ "
+            f"({stats['month_count']} запросов)",
+            f"Всего: {stats['all_total']:.2f} ₽ "
+            f"({stats['all_count']} запросов)",
+        ]
+
+        if stats["recent"]:
+            table_rows = []
+            for entry in stats["recent"]:
+                operation = entry.get("operation", "?")
+                price = float(entry.get("price", 0) or 0)
+                if operation == "yandexgpt":
+                    label = "YandexGPT"
+                    detail = (
+                        f"вх {entry.get('input_tokens', 0)}/"
+                        f"вых {entry.get('output_tokens', 0)} ток."
+                    )
+                elif operation == "ocr":
+                    label = "OCR"
+                    detail = f"{entry.get('pages', 1)} стр."
+                else:
+                    label = str(operation)
+                    detail = "-"
+                table_rows.append(f"{label:<10}{detail:<26}{price:>7.2f} ₽")
+            lines.append("")
+            lines.append("Последние операции:")
+            lines.append("<pre>" + "\n".join(table_rows) + "</pre>")
+
+        return "\n".join(lines)
 
     def refresh_last_day(self) -> None:
         (self.CORE_DIR / "last_day.txt").write_text(

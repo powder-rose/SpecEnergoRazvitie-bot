@@ -33,6 +33,7 @@ IMAGES_DIR = BOT_DIR / "images"
 LOGS_DIR = BOT_DIR / "logs"
 START_BUTTON_TEXT = "🚀 Начать"
 RESTART_BUTTON_TEXT = "🔄 Перезапустить"
+STATS_BUTTON_TEXT = "📊 Статистика"
 CONTROL_WORDS = {
     "/start",
     START_BUTTON_TEXT.casefold(),
@@ -213,6 +214,7 @@ def control_keyboard() -> types.ReplyKeyboardMarkup:
         types.KeyboardButton(START_BUTTON_TEXT),
         types.KeyboardButton(RESTART_BUTTON_TEXT),
     )
+    markup.row(types.KeyboardButton(STATS_BUTTON_TEXT))
     return markup
 
 
@@ -234,8 +236,21 @@ def is_control_message(message) -> bool:
     return text in CONTROL_WORDS
 
 
+def show_stats(message) -> None:
+    """Показывает статистику расходов на ИИ, не трогая текущий сценарий."""
+    bot.send_message(
+        message.chat.id,
+        ms.render_ai_usage_report(),
+        reply_markup=control_keyboard(),
+    )
+
+
 def recover_if_requested(message) -> bool:
-    """Перехватывает Начать/Перезапустить даже внутри next_step_handler."""
+    """Перехватывает Начать/Перезапустить/Статистику даже внутри next_step_handler."""
+    text = (getattr(message, "text", None) or "").strip()
+    if text == STATS_BUTTON_TEXT:
+        show_stats(message)
+        return True
     if not is_control_message(message):
         return False
     landing(message)
@@ -514,6 +529,17 @@ def landing(message):
             "❔ Выберите тип договора",
             reply_markup=contract_type_markup,
         )
+
+
+@bot.message_handler(
+    func=lambda message: bool(
+        message.text and message.text.strip() == STATS_BUTTON_TEXT
+    )
+)
+@safe_handler
+@employees_only
+def stats_command(message):
+    show_stats(message)
 
 
 @bot.callback_query_handler(

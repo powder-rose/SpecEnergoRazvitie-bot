@@ -40,6 +40,7 @@ IMAGES_DIR = BOT_DIR / "images"
 LOGS_DIR = BOT_DIR / "logs"
 START_BUTTON_TEXT = "🚀 Начать"
 RESTART_BUTTON_TEXT = "🔄 Перезапустить"
+STATS_BUTTON_TEXT = "📊 Статистика"
 START_WORDS = {
     "/start",
     START_BUTTON_TEXT.casefold(),
@@ -473,10 +474,15 @@ def inline_keyboard(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
 
 def control_keyboard() -> dict[str, Any]:
     return inline_keyboard(
-        [[
-            (START_BUTTON_TEXT, "start"),
-            (RESTART_BUTTON_TEXT, "restart"),
-        ]]
+        [
+            [
+                (START_BUTTON_TEXT, "start"),
+                (RESTART_BUTTON_TEXT, "restart"),
+            ],
+            [
+                (STATS_BUTTON_TEXT, "stats"),
+            ],
+        ]
     )
 
 
@@ -520,6 +526,11 @@ def show_start_menu(user_id: int, text: str | None = None) -> None:
         text or "Нажмите кнопку, чтобы сформировать новый проект договора.",
         [control_keyboard()],
     )
+
+
+def show_stats(user_id: int) -> None:
+    """Показывает статистику расходов на ИИ, не трогая текущий сценарий."""
+    bot.send(user_id, ms.render_ai_usage_report(), [control_keyboard()])
 
 
 def landing(user_id: int) -> None:
@@ -1099,6 +1110,10 @@ def handle_input(user_id: int, message: dict[str, Any]) -> None:
         landing(user_id)
         return
 
+    if text == STATS_BUTTON_TEXT:
+        show_stats(user_id)
+        return
+
     if stage == "idle":
         show_start_menu(
             user_id,
@@ -1242,6 +1257,10 @@ def handle_callback(update: dict[str, Any]) -> None:
 
     if payload in {"start", "restart"}:
         landing(user_id)
+        return
+
+    if payload == "stats":
+        show_stats(user_id)
         return
 
     data = session(user_id)
