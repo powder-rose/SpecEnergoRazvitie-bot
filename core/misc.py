@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shutil
 import base64
-import calendar
 from copy import deepcopy
 import logging
 import os
@@ -123,7 +122,6 @@ class Miscellaneous:
         11: "ноября",
         12: "декабря",
     }
-
     NOMINATIVUS = {
         1: "январь",
         2: "февраль",
@@ -138,7 +136,6 @@ class Miscellaneous:
         11: "ноябрь",
         12: "декабрь",
     }
-
     COMPANY_FIELDS = {
         0: "организационно-правовая форма",
         1: "должность руководителя в родительном падеже",
@@ -745,7 +742,7 @@ class Miscellaneous:
             len(content),
         )
         return content
-    
+
     def sent_image_to_ai(
         self,
         path: str | Path,
@@ -1312,12 +1309,27 @@ class Miscellaneous:
         return missing_fields
 
     @classmethod
+    def _apply_red_shading(cls, cell: Any) -> None:
+        """Заливает ячейку красным — пометка отсутствующего реквизита."""
+        w = f"{{{cls.WORD_NS}}}"
+        tc_pr = cell.find(w + 'tcPr')
+        if tc_pr is None:
+            tc_pr = etree.Element(w + 'tcPr')
+            cell.insert(0, tc_pr)
+        for existing in tc_pr.findall(w + 'shd'):
+            tc_pr.remove(existing)
+        shd = etree.SubElement(tc_pr, w + 'shd')
+        shd.set(w + 'val', 'clear')
+        shd.set(w + 'color', 'auto')
+        shd.set(w + 'fill', 'FF0000')
+
+    @classmethod
     def _set_replacement_cell_value(
         cls,
         container: Any,
         value: str,
         namespaces: dict[str, str],
-    ) -> None:
+    ) -> Any:
         """
         Записывает значение в колонку «ИНФОРМАЦИЯ ОТ ЗАКАЗЧИКА».
 
@@ -1394,6 +1406,8 @@ class Miscellaneous:
                 )
             text_node.text = line
 
+        return cell
+
     @classmethod
     def _fill_replacement_table(
         cls,
@@ -1402,6 +1416,7 @@ class Miscellaneous:
         replacements: dict[str, Any],
         *,
         unwrap_input_controls: bool = False,
+        highlight_keys: set[str] | None = None,
     ) -> None:
         """
         Создаёт копию исходной таблицы и заполняет ТОЛЬКО колонку 4.
@@ -1410,8 +1425,13 @@ class Miscellaneous:
         и никогда не заменяются. Для шаблона СЭР можно дополнительно
         развернуть content controls колонки 4 в обычные ячейки, чтобы Word
         не обрезал значения по ограничениям старых выпадающих списков.
+
+        highlight_keys — набор autozamena_XXX, чьи ячейки нужно залить
+        красным (используется, когда договор формируется с неполными
+        реквизитами через allow_incomplete=True).
         """
         namespaces = {'w': cls.WORD_NS}
+        highlight_keys = highlight_keys or set()
 
         with ZipFile(template_path, 'r') as source_archive:
             try:
@@ -1513,11 +1533,13 @@ class Miscellaneous:
                     target_cell.getparent().replace(target_cell, plain_cell)
                     target_cell = plain_cell
 
-                cls._set_replacement_cell_value(
+                resolved_cell = cls._set_replacement_cell_value(
                     target_cell,
                     str(replacements[key]),
                     namespaces,
                 )
+                if key in highlight_keys:
+                    cls._apply_red_shading(resolved_cell)
                 filled.add(key)
 
             expected = set(replacements)
@@ -1544,57 +1566,6 @@ class Miscellaneous:
                         else source_archive.read(item.filename)
                     )
                     target_archive.writestr(item, data)
-
-    @classmethod
-    def _add_months(cls, year: int, month: int, delta: int) -> tuple[int, int]:
-        total = (month - 1) + delta
-        return year + total // 12, total % 12 + 1
-
-    @classmethod
-    def _build_ser_service_period(cls, start: datetime, months_count_raw: str) -> str:
-        try:
-            months_count = int(months_count_raw)
-        except (TypeError, ValueError):
-            months_count = 0
-        if months_count <= 0:
-            return ''
-
-        day, month, year = start.day, start.month, start.year
-
-        if day <= 15:
-            first_end_year, first_end_month = year, month
-        else:
-            first_end_year, first_end_month = cls._add_months(year, month, 1)
-
-        last_day = calendar.monthrange(first_end_year, first_end_month)[1]
-        first_segment = (
-            f'С {day} {cls.GENITIVUS[month]} '
-            f'по {last_day} {cls.GENITIVUS[first_end_month]} '
-            f'{first_end_year} года'
-        )
-
-        remaining = months_count - 1
-        if remaining <= 0:
-            return first_segment
-
-        trailing: list[tuple[int, str]] = []
-        cur_year, cur_month = first_end_year, first_end_month
-        for _ in range(remaining):
-            cur_year, cur_month = cls._add_months(cur_year, cur_month, 1)
-            trailing.append((cur_year, cls.NOMINATIVUS[cur_month]))
-
-        groups: list[tuple[list[str], int]] = []
-        for yr, name in trailing:
-            if groups and groups[-1][1] == yr:
-                groups[-1][0].append(name)
-            else:
-                groups.append(([name], yr))
-
-        trailing_text = ', '.join(
-            f"{', '.join(names)} {yr} года" for names, yr in groups
-        )
-
-        return f'{first_segment}, за {trailing_text}'
 
     def bot_insert_req(
             self,
@@ -1695,6 +1666,26 @@ class Miscellaneous:
             'autozamena_020': banco,
         }
 
+        highlight_keys: set[str] = set()
+        if not organization_full_name.strip():
+            highlight_keys.add('autozamena_004')
+        if not field(1):
+            highlight_keys.add('autozamena_005')
+        if not field(2):
+            highlight_keys.add('autozamena_006')
+        if not field(3):
+            highlight_keys.add('autozamena_007')
+        if not fio_short.strip():
+            highlight_keys.add('autozamena_008')
+        if not field(5):
+            highlight_keys.add('autozamena_010')
+        if not field(6):
+            highlight_keys.add('autozamena_011')
+        if not company_req.strip():
+            highlight_keys.add('autozamena_019')
+        if not banco.strip():
+            highlight_keys.add('autozamena_020')
+
         template_path = self.CORE_DIR / 'template2.docm'
         if not template_path.is_file():
             raise FileNotFoundError(
@@ -1711,6 +1702,7 @@ class Miscellaneous:
             template_path,
             output_path,
             replacements,
+            highlight_keys=highlight_keys,
         )
 
         LOGGER.info(
@@ -1804,6 +1796,26 @@ class Miscellaneous:
             'autozamena_020': banco,
         }
 
+        highlight_keys: set[str] = set()
+        if not organization_full_name.strip():
+            highlight_keys.add('autozamena_004')
+        if not field(1):
+            highlight_keys.add('autozamena_005')
+        if not field(2):
+            highlight_keys.add('autozamena_006')
+        if not field(3):
+            highlight_keys.add('autozamena_007')
+        if not fio_short.strip():
+            highlight_keys.add('autozamena_008')
+        if not field(5):
+            highlight_keys.add('autozamena_010')
+        if not field(6):
+            highlight_keys.add('autozamena_011')
+        if not company_req.strip():
+            highlight_keys.add('autozamena_019')
+        if not banco.strip():
+            highlight_keys.add('autozamena_020')
+
         template_path = (
             self.CORE_DIR / 'ООО СПЕЦКОНС_ПАСПОРТ БЕЗОПАСНОСТИ.docm'
         )
@@ -1823,6 +1835,7 @@ class Miscellaneous:
             output_path,
             replacements,
             unwrap_input_controls=True,
+            highlight_keys=highlight_keys,
         )
 
         LOGGER.info(
@@ -1877,6 +1890,46 @@ class Miscellaneous:
                     f"Плейсхолдер {key} не подключён ко всем блокам "
                     "реквизитов Заказчика"
                 )
+
+    @classmethod
+    def _add_months(cls, year: int, month: int, delta: int) -> tuple[int, int]:
+        total = (month - 1) + delta
+        return year + total // 12, total % 12 + 1
+
+    @classmethod
+    def _build_ser_service_period(cls, start: datetime, months_count_raw: str) -> str:
+        """
+        Формирует текст периода тех. обслуживания для autozamena_022 —
+        простой список месяцев в формате "месяц год, месяц год, ...",
+        как в примере-подсказке шаблона ("май 2024, июнь 2024, июль 2024").
+
+        Правило выбора стартового месяца:
+        - если день заполнения <= 15, этот месяц считается полным платным
+          и идёт первым в списке;
+        - если день заполнения > 15, остаток месяца — подарок, и список
+          начинается со следующего месяца.
+        Дальше перечисляются months_count месяцев подряд.
+        """
+        try:
+            months_count = int(months_count_raw)
+        except (TypeError, ValueError):
+            months_count = 0
+        if months_count <= 0:
+            return ''
+
+        day, month, year = start.day, start.month, start.year
+
+        if day <= 15:
+            cur_year, cur_month = year, month
+        else:
+            cur_year, cur_month = cls._add_months(year, month, 1)
+
+        parts = [f'{cls.NOMINATIVUS[cur_month]} {cur_year}']
+        for _ in range(months_count - 1):
+            cur_year, cur_month = cls._add_months(cur_year, cur_month, 1)
+            parts.append(f'{cls.NOMINATIVUS[cur_month]} {cur_year}')
+
+        return ', '.join(parts)
 
     def bot_insert_req_ser(
             self,
@@ -1993,6 +2046,26 @@ class Miscellaneous:
             'autozamena_027': banco,
         }
 
+        highlight_keys: set[str] = set()
+        if not organization_full_name.strip():
+            highlight_keys.add('autozamena_004')
+        if not field(1):
+            highlight_keys.add('autozamena_005')
+        if not field(2):
+            highlight_keys.add('autozamena_006')
+        if not field(3):
+            highlight_keys.add('autozamena_007')
+        if not fio_short.strip():
+            highlight_keys.add('autozamena_008')
+        if not field(5):
+            highlight_keys.add('autozamena_010')
+        if not field(6):
+            highlight_keys.add('autozamena_011')
+        if not company_req.strip():
+            highlight_keys.add('autozamena_026')
+        if not banco.strip():
+            highlight_keys.add('autozamena_027')
+
         template_path = self.CORE_DIR / 'ООО СПЕЦЭНЕРГОРАЗВИТИЕ.docm'
         if not template_path.is_file():
             raise FileNotFoundError(
@@ -2012,6 +2085,7 @@ class Miscellaneous:
             output_path,
             replacements,
             unwrap_input_controls=True,
+            highlight_keys=highlight_keys,
         )
 
         LOGGER.info(
@@ -2022,4 +2096,3 @@ class Miscellaneous:
             output_path,
         )
         return output_path
-

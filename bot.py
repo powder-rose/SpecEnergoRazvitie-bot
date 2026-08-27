@@ -291,22 +291,97 @@ def report_missing_company_details(
     message,
     error: misc.MissingCompanyDetailsError,
     retry_handler: Callable,
+    company_data: list[str | None],
 ) -> None:
+    user_id = getattr(message.from_user, "id", None)
     LOGGER.warning(
         "Формирование договора остановлено: не хватает реквизитов | "
         "user_id=%s | missing=%s",
-        getattr(message.from_user, "id", None),
+        user_id,
         ", ".join(error.missing_fields),
     )
+    if user_id is not None and user_id in user_data:
+        user_data[user_id]["pending_company_data"] = company_data
+        user_data[user_id]["pending_retry_handler"] = retry_handler
     fields = "\n".join(f"• <b>{field}</b>" for field in error.missing_fields)
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton(
+            "✏️ Дополнить реквизиты", callback_data="missing_retry"
+        ),
+        types.InlineKeyboardButton(
+            "⏭ Сформировать без них", callback_data="missing_skip"
+        ),
+    )
     bot.send_message(
         message.chat.id,
-        "⚠️ Договор пока нельзя сформировать. Не хватает обязательных "
-        f"реквизитов:\n\n{fields}\n\n"
-        "Уточните их у заказчика и отправьте исправленные реквизиты повторно.",
+        "⚠️ Не хватает обязательных реквизитов:\n\n"
+        f"{fields}\n\n"
+        "Уточните их у заказчика и нажмите «Дополнить реквизиты», чтобы "
+        "отправить исправленные данные повторно, либо «Сформировать без "
+        "них» — договор будет создан с пустыми полями, выделенными в "
+        "документе красным.",
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data == "missing_retry")
+@safe_handler
+def missing_retry(callback):
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    retry_handler = user_data[user_id].pop("pending_retry_handler", None)
+    user_data[user_id].pop("pending_company_data", None)
+    if retry_handler is None:
+        show_start_button(callback.message, user_id)
+        return
+
+    bot.send_message(
+        chat_id,
+        "❔ Отправьте исправленные реквизиты повторно.",
         reply_markup=control_keyboard(),
     )
-    replace_next_step(message, retry_handler)
+    replace_next_step(callback.message, retry_handler)
+
+
+@bot.callback_query_handler(func=lambda callback: callback.data == "missing_skip")
+@safe_handler
+def missing_skip(callback):
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    company_data = user_data[user_id].pop("pending_company_data", None)
+    user_data[user_id].pop("pending_retry_handler", None)
+    if company_data is None:
+        show_start_button(callback.message, user_id)
+        return
+
+    scenario_id = user_data[user_id].get("scenario_id")
+    bot.send_message(
+        chat_id,
+        "⏭ Формирую договор без недостающих реквизитов — в документе они "
+        "будут выделены красным.",
+        reply_markup=control_keyboard(),
+    )
+    if build_and_send_contract(
+        callback.message,
+        company_data,
+        scenario_id=scenario_id,
+        allow_incomplete=True,
+        user_id=user_id,
+    ):
+        show_start_button(callback.message, user_id)
 
 
 def send_contract_document(chat_id: int, document_path: Path) -> None:
@@ -428,6 +503,12 @@ def landing(message):
             types.InlineKeyboardButton("ООО СПЕЦКОНС", callback_data="contract_specons"),
             types.InlineKeyboardButton("ООО СПЕЦЭНЕРГОРАЗВИТИЕ", callback_data="contract_ser"),
         )
+        contract_type_markup.row(
+            types.InlineKeyboardButton(
+                "ПАСПОРТ БЕЗОПАСНОСТИ",
+                callback_data="contract_passport_security",
+            ),
+        )
         bot.send_message(
             message.chat.id,
             "❔ Выберите тип договора",
@@ -435,7 +516,13 @@ def landing(message):
         )
 
 
-@bot.callback_query_handler(func=lambda callback: callback.data in ("contract_specons", "contract_ser"))
+@bot.callback_query_handler(
+    func=lambda callback: callback.data in (
+        "contract_specons",
+        "contract_ser",
+        "contract_passport_security",
+    )
+)
 @safe_handler
 def choose_contract_type(callback):
     bot.answer_callback_query(callback.id)
@@ -446,10 +533,17 @@ def choose_contract_type(callback):
         show_start_button(callback.message, user_id)
         return
 
-    is_ser = callback.data == "contract_ser"
-    user_data[user_id]["contract_type"] = "ser" if is_ser else "specons"
+    contract_types = {
+        "contract_specons": ("specons", "ООО СПЕЦКОНС"),
+        "contract_ser": ("ser", "ООО СПЕЦЭНЕРГОРАЗВИТИЕ"),
+        "contract_passport_security": (
+            "passport_security",
+            "ООО СПЕЦКОНС — ПАСПОРТ БЕЗОПАСНОСТИ",
+        ),
+    }
+    contract_type, contract_label = contract_types[callback.data]
+    user_data[user_id]["contract_type"] = contract_type
 
-    contract_label = "ООО СПЕЦЭНЕРГОРАЗВИТИЕ" if is_ser else "ООО СПЕЦКОНС"
     bot.send_message(
         chat_id,
         f"✅ Выбран тип договора: <b>{contract_label}</b>",
@@ -902,6 +996,24 @@ def parse_non_negative_integer(message, retry_handler: Callable) -> int | None:
     return int(answer)
 
 
+def send_source_selection(message) -> None:
+    """Показывает единое меню выбора источника реквизитов."""
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("🧾 Документ", callback_data="doc"),
+        types.InlineKeyboardButton("🖼️ Картинка", callback_data="pic"),
+    )
+    markup.row(
+        types.InlineKeyboardButton("📄 PDF-скан", callback_data="pdf"),
+        types.InlineKeyboardButton("📢 Сообщение", callback_data="mes"),
+    )
+    bot.send_message(
+        message.chat.id,
+        "❔ Выберите источник реквизитов",
+        reply_markup=markup,
+    )
+
+
 @safe_handler
 def costs(message):
     if recover_if_requested(message) or not ensure_active_session(message):
@@ -915,6 +1027,9 @@ def costs(message):
         f"✅ Стоимость принята: <b>{value:,} ₽</b>".replace(",", " "),
         reply_markup=control_keyboard(),
     )
+    if user_data[message.from_user.id].get("contract_type") == "passport_security":
+        send_source_selection(message)
+        return
     register_retry(message, complectation, "❔ Введите количество комплектов")
 
 
@@ -935,21 +1050,7 @@ def complectation(message):
         f"✅ Количество комплектов принято: <b>{amount}</b>",
         reply_markup=control_keyboard(),
     )
-
-    markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("🧾 Документ", callback_data="doc"),
-        types.InlineKeyboardButton("🖼️ Картинка", callback_data="pic"),
-    )
-    markup.row(
-        types.InlineKeyboardButton("📄 PDF-скан", callback_data="pdf"),
-        types.InlineKeyboardButton("📢 Сообщение", callback_data="mes"),
-    )
-    bot.send_message(
-        message.chat.id,
-        "❔ Выберите источник реквизитов",
-        reply_markup=markup,
-    )
+    send_source_selection(message)
 
 
 @bot.callback_query_handler(func=lambda callback: True)
@@ -996,8 +1097,11 @@ def build_and_send_contract(
     company_data: list[str | None],
     source_path: Path | None = None,
     scenario_id: str | None = None,
+    *,
+    allow_incomplete: bool = False,
+    user_id: int | None = None,
 ) -> bool:
-    user_id = message.from_user.id
+    user_id = user_id if user_id is not None else message.from_user.id
     local_doc: Path | None = None
     try:
         if (
@@ -1006,7 +1110,7 @@ def build_and_send_contract(
         ):
             LOGGER.info("Отменена устаревшая обработка | user_id=%s", user_id)
             return False
-        ms.validate_company_data(company_data)
+        ms.validate_company_data(company_data, raise_on_missing=not allow_incomplete)
         bot.send_message(
             message.chat.id,
             "🧾 Реквизиты извлечены. Рассчитываю суммы и заполняю шаблон…",
@@ -1030,6 +1134,20 @@ def build_and_send_contract(
                 numer_contract,
                 texted_total,
                 source_path,
+                allow_incomplete=allow_incomplete,
+            )
+        elif user_data[user_id].get("contract_type") == "passport_security":
+            numer_count = ms.get_bot_count_num(user_data, user_id)
+            texted_costs = ms.integer_texted(user_data[user_id]["cost"])
+            local_doc = ms.bot_insert_req_passport_security(
+                user_data,
+                user_id,
+                company_data,
+                numer_contract,
+                numer_count,
+                texted_costs,
+                source_path,
+                allow_incomplete=allow_incomplete,
             )
         else:
             numer_count = ms.get_bot_count_num(user_data, user_id)
@@ -1046,6 +1164,7 @@ def build_and_send_contract(
                 texted_costs,
                 texted_sending,
                 source_path,
+                allow_incomplete=allow_incomplete,
             )
 
         if (
@@ -1101,7 +1220,7 @@ def sentdoc(message):
         ):
             show_start_button(message)
     except misc.MissingCompanyDetailsError as exc:
-        report_missing_company_details(message, exc, sentdoc)
+        report_missing_company_details(message, exc, sentdoc, company_data)
     except Exception as exc:
         report_processing_error(message, exc)
     finally:
@@ -1133,7 +1252,7 @@ def pdf(message):
         ):
             show_start_button(message)
     except misc.MissingCompanyDetailsError as exc:
-        report_missing_company_details(message, exc, pdf)
+        report_missing_company_details(message, exc, pdf, company_data)
     except Exception as exc:
         report_processing_error(message, exc)
     finally:
@@ -1158,7 +1277,7 @@ def sentmes(message):
         ):
             show_start_button(message)
     except misc.MissingCompanyDetailsError as exc:
-        report_missing_company_details(message, exc, sentmes)
+        report_missing_company_details(message, exc, sentmes, company_data)
     except Exception as exc:
         report_processing_error(message, exc)
 
@@ -1192,7 +1311,7 @@ def photo(message):
         ):
             show_start_button(message)
     except misc.MissingCompanyDetailsError as exc:
-        report_missing_company_details(message, exc, photo)
+        report_missing_company_details(message, exc, photo, company_data)
     except misc.DocumentExtractionError as exc:
         report_processing_error(message, exc)
         replace_next_step(message, photo)
