@@ -2032,7 +2032,7 @@ class Miscellaneous:
 
     @classmethod
     def _validate_ser_template_placeholders(cls, template_path: Path) -> None:
-        """Проверяет, что шаблон СЭР использует единую схему autozamena_001..027."""
+        """Проверяет, что шаблон СЭР использует единую схему autozamena_001..028."""
         namespaces = {'w': cls.WORD_NS}
         with ZipFile(template_path, 'r') as archive:
             try:
@@ -2056,7 +2056,7 @@ class Miscellaneous:
                 + ', '.join(forbidden)
             )
 
-        expected = {f'autozamena_{index:03d}' for index in range(1, 28)}
+        expected = {f'autozamena_{index:03d}' for index in range(1, 29)}
         present = set(re.findall(r'autozamena_\d{3}', document_text))
         missing = sorted(expected - present)
         if missing:
@@ -2113,6 +2113,39 @@ class Miscellaneous:
             parts.append(f'{cls.NOMINATIVUS[cur_month]} {cur_year}')
 
         return ', '.join(parts)
+
+    @classmethod
+    def _build_ser_invoice_period(cls, start: datetime, months_count_raw: str) -> str:
+        """
+        Формирует текст периода для строки «Абонентская плата...» в счёте
+        на оплату (autozamena_028) — например, «за сентябрь, октябрь,
+        ноябрь». В отличие от _build_ser_service_period, года не указываем
+        (по образцу, который просил заказчик), только названия месяцев.
+
+        Использует то же правило выбора стартового месяца, что и
+        _build_ser_service_period, чтобы период в счёте и в договоре
+        совпадал.
+        """
+        try:
+            months_count = int(months_count_raw)
+        except (TypeError, ValueError):
+            months_count = 0
+        if months_count <= 0:
+            return ''
+
+        day, month, year = start.day, start.month, start.year
+
+        if day <= 15:
+            cur_year, cur_month = year, month
+        else:
+            cur_year, cur_month = cls._add_months(year, month, 1)
+
+        parts = [cls.NOMINATIVUS[cur_month]]
+        for _ in range(months_count - 1):
+            cur_year, cur_month = cls._add_months(cur_year, cur_month, 1)
+            parts.append(cls.NOMINATIVUS[cur_month])
+
+        return 'за ' + ', '.join(parts)
 
     def bot_insert_req_ser(
             self,
@@ -2227,6 +2260,7 @@ class Miscellaneous:
             'autozamena_025': ser_fields.get('email', ''),
             'autozamena_026': company_req,
             'autozamena_027': banco,
+            'autozamena_028': self._build_ser_invoice_period(now, months_count_raw),
         }
 
         highlight_keys: set[str] = set()
