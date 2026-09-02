@@ -2118,9 +2118,15 @@ class Miscellaneous:
     def _build_ser_invoice_period(cls, start: datetime, months_count_raw: str) -> str:
         """
         Формирует текст периода для строки «Абонентская плата...» в счёте
-        на оплату (autozamena_028) — например, «за сентябрь, октябрь,
-        ноябрь». В отличие от _build_ser_service_period, года не указываем
-        (по образцу, который просил заказчик), только названия месяцев.
+        на оплату (autozamena_028) — например, «за сентябрь, октябрь
+        2026 года». Год указываем один раз в конце (а не после каждого
+        месяца, как в _build_ser_service_period), если все месяцы
+        периода попадают в один календарный год.
+
+        Если период пересекает границу года (например, декабрь и
+        январь), месяцы группируются по году, и год указывается один раз
+        в конце каждой такой группы — например, «за декабрь 2026 года,
+        январь, февраль 2027 года».
 
         Использует то же правило выбора стартового месяца, что и
         _build_ser_service_period, чтобы период в счёте и в договоре
@@ -2140,12 +2146,26 @@ class Miscellaneous:
         else:
             cur_year, cur_month = cls._add_months(year, month, 1)
 
-        parts = [cls.NOMINATIVUS[cur_month]]
+        months = [(cur_year, cur_month)]
         for _ in range(months_count - 1):
             cur_year, cur_month = cls._add_months(cur_year, cur_month, 1)
-            parts.append(cls.NOMINATIVUS[cur_month])
+            months.append((cur_year, cur_month))
 
-        return 'за ' + ', '.join(parts)
+        # Группируем подряд идущие месяцы по году, чтобы «года» указывалось
+        # один раз в конце каждой годовой группы, а не после каждого месяца.
+        groups: list[tuple[int, list[int]]] = []
+        for y, m in months:
+            if groups and groups[-1][0] == y:
+                groups[-1][1].append(m)
+            else:
+                groups.append((y, [m]))
+
+        group_texts = [
+            f'{", ".join(cls.NOMINATIVUS[m] for m in group_months)} {group_year} года'
+            for group_year, group_months in groups
+        ]
+
+        return 'за ' + ', '.join(group_texts)
 
     def bot_insert_req_ser(
             self,
