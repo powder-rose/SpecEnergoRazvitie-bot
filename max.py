@@ -486,16 +486,40 @@ def control_keyboard() -> dict[str, Any]:
     )
 
 
-def contract_type_keyboard() -> dict[str, Any]:
+def contract_group_keyboard() -> dict[str, Any]:
+    """Верхний уровень выбора: юрлицо, а не конкретный шаблон договора.
+
+    ООО СПЕЦКОНС раскрывается в подменю (см. specons_group_keyboard) —
+    там сейчас два варианта, дальше туда добавятся другие шаблоны
+    договоров СпецКонс. ООО СПЕЦЭНЕРГОРАЗВИТИЕ пока ведёт сразу к
+    выбору договора СЕР, т. к. там только один шаблон.
+    """
     return inline_keyboard(
         [
             [
-                ("ООО СПЕЦКОНС", "contract:specons"),
+                ("ООО СПЕЦКОНС", "contract_group:specons"),
                 ("ООО СПЕЦЭНЕРГОРАЗВИТИЕ", "contract:ser"),
             ],
+            [(RESTART_BUTTON_TEXT, "restart")],
+        ]
+    )
+
+
+def specons_group_keyboard() -> dict[str, Any]:
+    """Подменю ООО СПЕЦКОНС: конкретные шаблоны договоров этого юрлица."""
+    return inline_keyboard(
+        [
             [
-                ("ПАСПОРТ БЕЗОПАСНОСТИ", "contract:passport_security"),
+                ("Паспорт безопасности", "contract:passport_security"),
+                ("СпецКонс", "contract:specons"),
             ],
+            [
+                (
+                    "Паспорт безопасности с согласованием",
+                    "contract:passport_security_agreed",
+                ),
+            ],
+            [("СОУТ", "contract:sout")],
             [(RESTART_BUTTON_TEXT, "restart")],
         ]
     )
@@ -541,7 +565,7 @@ def landing(user_id: int) -> None:
     bot.send(
         user_id,
         "❔ Выберите тип договора",
-        [contract_type_keyboard()],
+        [contract_group_keyboard()],
     )
 
 
@@ -928,6 +952,37 @@ def finish_document(
                     allow_incomplete=True,
                 )
             )
+        elif data.get("contract_type") == "passport_security_agreed":
+            number_invoice = ms.get_bot_count_num(user_data, user_id)
+            texted_costs = ms.integer_texted(data["cost"])
+            local_doc = Path(
+                ms.bot_insert_req_passport_security_agreed(
+                    user_data,
+                    user_id,
+                    company_data,
+                    number_contract,
+                    number_invoice,
+                    texted_costs,
+                    source_path,
+                    allow_incomplete=True,
+                )
+            )
+        elif data.get("contract_type") == "sout":
+            number_invoice = ms.get_bot_count_num(user_data, user_id)
+            texted_costs = ms.integer_texted(data["cost"])
+            local_doc = Path(
+                ms.bot_insert_req_sout(
+                    user_data,
+                    user_id,
+                    company_data,
+                    number_contract,
+                    number_invoice,
+                    texted_costs,
+                    data.get("workplaces_count", ""),
+                    source_path,
+                    allow_incomplete=True,
+                )
+            )
         else:
             number_invoice = ms.get_bot_count_num(user_data, user_id)
             texted_costs = ms.integer_texted(data["cost"])
@@ -1041,8 +1096,18 @@ def handle_text_stage(user_id: int, text: str) -> bool:
             f"✅ Стоимость принята: <b>{value:,} ₽</b>".replace(",", " "),
             [control_keyboard()],
         )
-        if data.get("contract_type") == "passport_security":
+        contract_type = data.get("contract_type")
+        if contract_type in ("passport_security", "passport_security_agreed"):
             ask_source(user_id)
+            return True
+        if contract_type == "sout":
+            data["stage"] = "workplaces"
+            bot.send(
+                user_id,
+                "❔ Введите количество рабочих мест, подлежащих "
+                "специальной оценке условий труда",
+                [control_keyboard()],
+            )
             return True
         data["stage"] = "complects"
         bot.send(user_id, "❔ Введите количество комплектов", [control_keyboard()])
@@ -1063,6 +1128,24 @@ def handle_text_stage(user_id: int, text: str) -> bool:
         bot.send(
             user_id,
             f"✅ Количество комплектов принято: <b>{amount}</b>",
+            [control_keyboard()],
+        )
+        ask_source(user_id)
+        return True
+
+    if stage == "workplaces":
+        if not text.isdigit():
+            bot.send(
+                user_id,
+                "❌ Введите целое неотрицательное число.",
+                [control_keyboard()],
+            )
+            return True
+        amount = int(text)
+        data["workplaces_count"] = amount
+        bot.send(
+            user_id,
+            f"✅ Количество рабочих мест принято: <b>{amount}</b>",
             [control_keyboard()],
         )
         ask_source(user_id)
@@ -1126,7 +1209,7 @@ def handle_input(user_id: int, message: dict[str, Any]) -> None:
         bot.send(
             user_id,
             "❔ Сначала выберите тип договора кнопкой ниже.",
-            [contract_type_keyboard()],
+            [contract_group_keyboard()],
         )
         return
 
@@ -1265,10 +1348,26 @@ def handle_callback(update: dict[str, Any]) -> None:
 
     data = session(user_id)
 
+    if payload == "contract_group:specons":
+        if data.get("stage") != "contract_type":
+            show_start_menu(
+                user_id,
+                "⚠️ Этот выбор относится к завершённому сценарию. Нажмите «Начать».",
+            )
+            return
+        bot.send(
+            user_id,
+            "❔ ООО СПЕЦКОНС — выберите тип договора",
+            [specons_group_keyboard()],
+        )
+        return
+
     if payload in {
         "contract:specons",
         "contract:ser",
         "contract:passport_security",
+        "contract:passport_security_agreed",
+        "contract:sout",
     }:
         if data.get("stage") != "contract_type":
             show_start_menu(
@@ -1282,6 +1381,10 @@ def handle_callback(update: dict[str, Any]) -> None:
             "specons": "ООО СПЕЦКОНС",
             "ser": "ООО СПЕЦЭНЕРГОРАЗВИТИЕ",
             "passport_security": "ООО СПЕЦКОНС — ПАСПОРТ БЕЗОПАСНОСТИ",
+            "passport_security_agreed": (
+                "ООО СПЕЦКОНС — ПАСПОРТ БЕЗОПАСНОСТИ С СОГЛАСОВАНИЕМ"
+            ),
+            "sout": "ООО СПЕЦКОНС — СОУТ",
         }
         contract_label = contract_labels[contract_type]
         bot.send(

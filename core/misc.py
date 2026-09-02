@@ -11,7 +11,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -2023,6 +2023,397 @@ class Miscellaneous:
 
         LOGGER.info(
             'Договор на паспорт безопасности сформирован | '
+            'user_id=%s | organization=%s | path=%s',
+            user_id,
+            organization_full_name,
+            output_path,
+        )
+        return output_path
+
+    @classmethod
+    def _validate_sout_template_placeholders(cls, template_path: Path) -> None:
+        """
+        Проверяет схему автозамен шаблона ООО СПЕЦКОНС_СОУТ.
+
+        В отличие от «Разовых услуг»/«Паспорта безопасности», у СОУТ
+        нумерация не сплошная: намеренно пропущены autozamena_003, 005,
+        006, 009 (ИП-ветвление должности/основания полномочий заказчику
+        этого шаблона не нужно — по решению пользователя договор СОУТ
+        заключается только с ООО). autozamena_022 — дата окончания
+        оказания услуг, вычисляется как дата заключения договора + 45
+        календарных дней (см. bot_insert_req_sout), в отличие от
+        остальных дат шаблона это не «сегодня», а «сегодня + 45 дней».
+        Реквизиты заказчика (ОГРН/ИНН/КПП/банк/р-с/к-с/БИК) в этом
+        шаблоне — отдельные плейсхолдеры, а не два объединённых блока,
+        как в остальных шаблонах СпецКонс.
+        """
+        namespaces = {'w': cls.WORD_NS}
+        with ZipFile(template_path, 'r') as archive:
+            try:
+                root = etree.fromstring(archive.read('word/document.xml'))
+            except KeyError as exc:
+                raise RuntimeError(
+                    "В шаблоне СОУТ отсутствует word/document.xml"
+                ) from exc
+
+        document_text = ''.join(
+            root.xpath('.//w:t/text()', namespaces=namespaces)
+        )
+
+        expected = {
+            f'autozamena_{index:03d}'
+            for index in (
+                1, 2, 4, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+                22,
+            )
+        }
+        present = set(re.findall(r'autozamena_\d{3}', document_text))
+        missing = sorted(expected - present)
+        if missing:
+            raise RuntimeError(
+                "В шаблоне СОУТ отсутствуют плейсхолдеры: "
+                + ', '.join(missing)
+            )
+        unexpected = sorted(present - expected)
+        if unexpected:
+            raise RuntimeError(
+                "В шаблоне СОУТ обнаружены посторонние плейсхолдеры: "
+                + ', '.join(unexpected)
+            )
+
+        # autozamena_004 (наименование заказчика) и autozamena_008 (ФИО
+        # для подписи) должны стоять не только в служебной таблице, но и
+        # в обоих блоках реквизитов Заказчика (страница договора и
+        # Приложение №1).
+        for key in ('autozamena_004', 'autozamena_008'):
+            if document_text.count(key) < 3:
+                raise RuntimeError(
+                    f"Плейсхолдер {key} не подключён ко всем блокам "
+                    "реквизитов Заказчика"
+                )
+
+    def bot_insert_req_sout(
+            self,
+            user_data: dict[int, dict[str, Any]],
+            user_id: int,
+            company: list[str | None],
+            numer: str,
+            counting: str,
+            texted_costs: str,
+            workplaces_count: str,
+            way: str | Path | None = None,
+            *,
+            allow_incomplete: bool = False,
+    ) -> Path:
+        """
+        Формирует договор ООО СПЕЦКОНС на проведение специальной оценки
+        условий труда (СОУТ).
+
+        В отличие от «Разовых услуг»/«Паспорта безопасности», реквизиты
+        заказчика (ОГРН/ИНН/КПП/банк/р-с/к-с/БИК) подставляются как
+        отдельные плейсхолдеры (autozamena_016..021), а не объединяются
+        в два текстовых блока — так устроен сам шаблон.
+
+        Пункт 2.1.2 договора («Окончание оказания Услуг») ссылается на
+        autozamena_022 — дату, вычисленную как дата заключения договора
+        (сегодня) + 45 календарных дней.
+        """
+        self.validate_company_data(
+            company,
+            raise_on_missing=not allow_incomplete,
+        )
+
+        def field(index: int) -> str:
+            value = company[index] if index < len(company) else None
+            return str(value).strip() if value is not None else ''
+
+        organization_full_name = self.build_organization_full_name(
+            field(0),
+            field(13),
+            field(4),
+        )
+        fio_short = self.abbreviate_fio(field(4))
+
+        now = datetime.now()
+        date_start = (
+            f'{now.day} '
+            f'{self.GENITIVUS[now.month]} '
+            f'{now.year} года'
+        )
+        end = now + timedelta(days=45)
+        date_end = (
+            f'{end.day} '
+            f'{self.GENITIVUS[end.month]} '
+            f'{end.year} года'
+        )
+
+        replacements = {
+            'autozamena_001': numer,
+            'autozamena_002': date_start,
+            'autozamena_004': organization_full_name,
+            'autozamena_007': field(3),
+            'autozamena_008': fio_short,
+            'autozamena_010': field(5),
+            'autozamena_011': field(6),
+            'autozamena_012': counting,
+            'autozamena_013': str(user_data[user_id]['cost']),
+            'autozamena_014': texted_costs,
+            'autozamena_015': str(workplaces_count),
+            'autozamena_016': field(12),
+            'autozamena_017': field(11),
+            'autozamena_018': field(7),
+            'autozamena_019': field(8),
+            'autozamena_020': field(9),
+            'autozamena_021': field(10),
+            'autozamena_022': date_end,
+        }
+
+        highlight_keys: set[str] = set()
+        if not organization_full_name.strip():
+            highlight_keys.add('autozamena_004')
+        if not field(3):
+            highlight_keys.add('autozamena_007')
+        if not fio_short.strip():
+            highlight_keys.add('autozamena_008')
+        if not field(5):
+            highlight_keys.add('autozamena_010')
+        if not field(6):
+            highlight_keys.add('autozamena_011')
+        if not str(workplaces_count).strip():
+            highlight_keys.add('autozamena_015')
+        if not field(12):
+            highlight_keys.add('autozamena_016')
+        if not field(11):
+            highlight_keys.add('autozamena_017')
+        if not field(7):
+            highlight_keys.add('autozamena_018')
+        if not field(8):
+            highlight_keys.add('autozamena_019')
+        if not field(9):
+            highlight_keys.add('autozamena_020')
+        if not field(10):
+            highlight_keys.add('autozamena_021')
+
+        template_path = self.CORE_DIR / 'ООО СПЕЦКОНС_СОУТ.docm'
+        if not template_path.is_file():
+            raise FileNotFoundError(
+                f'Не найден шаблон СОУТ: {template_path}'
+            )
+        self._validate_sout_template_placeholders(template_path)
+
+        source_id = Path(way).stem if way else uuid4().hex
+        output_path = (
+            self.DOCS_DIR
+            / f'ДОГОВОР_СОУТ_{source_id}.docm'
+        )
+
+        self._fill_replacement_table(
+            template_path,
+            output_path,
+            replacements,
+            highlight_keys=highlight_keys,
+        )
+
+        LOGGER.info(
+            'Договор СОУТ сформирован | '
+            'user_id=%s | organization=%s | path=%s',
+            user_id,
+            organization_full_name,
+            output_path,
+        )
+        return output_path
+
+    @classmethod
+    def _validate_passport_security_agreed_template_placeholders(
+            cls, template_path: Path,
+    ) -> None:
+        """
+        Проверяет схему автозамен шаблона ООО СПЕЦКОНС_ПАСПОРТ
+        БЕЗОПАСНОСТИ С СОГЛАСОВАНИЕМ — autozamena_001..016 сплошной
+        нумерацией (как в «Разовых услугах»/базовом «Паспорте
+        безопасности»), но реквизиты Заказчика объединены в два блока
+        под номерами 015/016 (а не 019/020, как в остальных шаблонах
+        СпецКонс) — так устроен сам шаблон.
+        """
+        namespaces = {'w': cls.WORD_NS}
+        with ZipFile(template_path, 'r') as archive:
+            try:
+                root = etree.fromstring(archive.read('word/document.xml'))
+            except KeyError as exc:
+                raise RuntimeError(
+                    "В шаблоне «Паспорт безопасности с согласованием» "
+                    "отсутствует word/document.xml"
+                ) from exc
+
+        document_text = ''.join(
+            root.xpath('.//w:t/text()', namespaces=namespaces)
+        )
+
+        expected = {f'autozamena_{index:03d}' for index in range(1, 17)}
+        present = set(re.findall(r'autozamena_\d{3}', document_text))
+        missing = sorted(expected - present)
+        if missing:
+            raise RuntimeError(
+                "В шаблоне «Паспорт безопасности с согласованием» "
+                "отсутствуют плейсхолдеры: " + ', '.join(missing)
+            )
+        unexpected = sorted(present - expected)
+        if unexpected:
+            raise RuntimeError(
+                "В шаблоне «Паспорт безопасности с согласованием» "
+                "обнаружены посторонние плейсхолдеры: "
+                + ', '.join(unexpected)
+            )
+
+        for key in ('autozamena_004', 'autozamena_008'):
+            if document_text.count(key) < 2:
+                raise RuntimeError(
+                    f"Плейсхолдер {key} не подключён к реквизитам "
+                    "Заказчика"
+                )
+
+    def bot_insert_req_passport_security_agreed(
+            self,
+            user_data: dict[int, dict[str, Any]],
+            user_id: int,
+            company: list[str | None],
+            numer: str,
+            counting: str,
+            texted_costs: str,
+            way: str | Path | None = None,
+            *,
+            allow_incomplete: bool = False,
+    ) -> Path:
+        """
+        Формирует договор ООО СПЕЦКОНС на паспорт безопасности с
+        согласованием.
+
+        Шаблон готовый — Python заполняет только колонку «ИНФОРМАЦИЯ
+        ОТ ЗАКАЗЧИКА» в таблице автозамен, как и во всех остальных
+        шаблонах СпецКонс. Схема тегов совпадает с базовым «Паспортом
+        безопасности» (autozamena_001..014), но объединённые блоки
+        реквизитов Заказчика в этом шаблоне — autozamena_015/016 (а не
+        019/020).
+        """
+        self.validate_company_data(
+            company,
+            raise_on_missing=not allow_incomplete,
+        )
+
+        def field(index: int) -> str:
+            value = company[index] if index < len(company) else None
+            return str(value).strip() if value is not None else ''
+
+        is_entrepreneur = self.is_individual_entrepreneur(field(0))
+        organization_full_name = self.build_organization_full_name(
+            field(0),
+            field(13),
+            field(4),
+        )
+        fio_short = self.abbreviate_fio(field(4))
+        ustav = 'листа записи ЕГРИП' if is_entrepreneur else 'Устава'
+
+        company_req = '\n'.join(
+            value
+            for value in (
+                f'Юридический адрес: {field(6)}' if field(6) else '',
+                f'ОГРН: {field(12)}' if field(12) else '',
+                f'ИНН: {field(5)}' if field(5) else '',
+                (
+                    f'КПП: {field(11)}'
+                    if not is_entrepreneur and field(11)
+                    else ''
+                ),
+            )
+            if value
+        )
+
+        banco = '\n'.join(
+            value
+            for value in (
+                f'Банк: {field(7)}' if field(7) else '',
+                f'Расчетный счет: {field(8)}' if field(8) else '',
+                f'Корр. счет: {field(9)}' if field(9) else '',
+                f'БИК: {field(10)}' if field(10) else '',
+            )
+            if value
+        )
+
+        now = datetime.now()
+        date_start = (
+            f'{now.day} '
+            f'{self.GENITIVUS[now.month]} '
+            f'{now.year} года'
+        )
+
+        replacements = {
+            'autozamena_001': numer,
+            'autozamena_002': date_start,
+            'autozamena_003': user_data[user_id]['ending'],
+            'autozamena_004': organization_full_name,
+            'autozamena_005': field(1),
+            'autozamena_006': field(2),
+            'autozamena_007': field(3),
+            'autozamena_008': fio_short,
+            'autozamena_009': ustav,
+            'autozamena_010': field(5),
+            'autozamena_011': field(6),
+            'autozamena_012': counting,
+            'autozamena_013': str(user_data[user_id]['cost']),
+            'autozamena_014': texted_costs,
+            'autozamena_015': company_req,
+            'autozamena_016': banco,
+        }
+
+        highlight_keys: set[str] = set()
+        if not organization_full_name.strip():
+            highlight_keys.add('autozamena_004')
+        if not field(1):
+            highlight_keys.add('autozamena_005')
+        if not field(2):
+            highlight_keys.add('autozamena_006')
+        if not field(3):
+            highlight_keys.add('autozamena_007')
+        if not fio_short.strip():
+            highlight_keys.add('autozamena_008')
+        if not field(5):
+            highlight_keys.add('autozamena_010')
+        if not field(6):
+            highlight_keys.add('autozamena_011')
+        if not company_req.strip():
+            highlight_keys.add('autozamena_015')
+        if not banco.strip():
+            highlight_keys.add('autozamena_016')
+
+        template_path = (
+            self.CORE_DIR
+            / 'ООО СПЕЦКОНС_ПАСПОРТ БЕЗОПАСНОСТИ С СОГЛАСОВАНИЕМ.docm'
+        )
+        if not template_path.is_file():
+            raise FileNotFoundError(
+                'Не найден шаблон паспорта безопасности с согласованием: '
+                f'{template_path}'
+            )
+        self._validate_passport_security_agreed_template_placeholders(
+            template_path,
+        )
+
+        source_id = Path(way).stem if way else uuid4().hex
+        output_path = (
+            self.DOCS_DIR
+            / f'ДОГОВОР_ПАСПОРТ_БЕЗОПАСНОСТИ_СОГЛАСОВАНИЕ_{source_id}.docm'
+        )
+
+        self._fill_replacement_table(
+            template_path,
+            output_path,
+            replacements,
+            unwrap_input_controls=True,
+            highlight_keys=highlight_keys,
+        )
+
+        LOGGER.info(
+            'Договор на паспорт безопасности с согласованием сформирован | '
             'user_id=%s | organization=%s | path=%s',
             user_id,
             organization_full_name,

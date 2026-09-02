@@ -218,6 +218,52 @@ def control_keyboard() -> types.ReplyKeyboardMarkup:
     return markup
 
 
+def contract_group_keyboard() -> types.InlineKeyboardMarkup:
+    """Верхний уровень выбора: юрлицо, а не конкретный шаблон договора.
+
+    ООО СПЕЦКОНС раскрывается в подменю (см. specons_group_keyboard) —
+    там сейчас два варианта, дальше туда добавятся другие шаблоны
+    договоров СпецКонс. ООО СПЕЦЭНЕРГОРАЗВИТИЕ пока ведёт сразу к
+    выбору договора СЕР, т. к. там только один шаблон.
+    """
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton(
+            "ООО СПЕЦКОНС", callback_data="contract_group_specons"
+        ),
+        types.InlineKeyboardButton(
+            "ООО СПЕЦЭНЕРГОРАЗВИТИЕ", callback_data="contract_ser"
+        ),
+    )
+    return markup
+
+
+def specons_group_keyboard() -> types.InlineKeyboardMarkup:
+    """Подменю ООО СПЕЦКОНС: конкретные шаблоны договоров этого юрлица."""
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton(
+            "Паспорт безопасности", callback_data="contract_passport_security"
+        ),
+        types.InlineKeyboardButton(
+            "СпецКонс", callback_data="contract_specons"
+        ),
+    )
+    markup.row(
+        types.InlineKeyboardButton(
+            "Паспорт безопасности с согласованием",
+            callback_data="contract_passport_security_agreed",
+        ),
+    )
+    markup.row(
+        types.InlineKeyboardButton("СОУТ", callback_data="contract_sout"),
+    )
+    markup.row(
+        types.InlineKeyboardButton("◀️ Назад", callback_data="contract_group_back"),
+    )
+    return markup
+
+
 def show_start_button(message, user_id: int | None = None) -> None:
     """Возвращает пользователя к безопасной точке начала сценария."""
     with chat_lock(message.chat.id):
@@ -513,21 +559,10 @@ def landing(message):
             "scenario_id": uuid4().hex,
         }
         LOGGER.info("Сценарий запущен | user_id=%s", user_id)
-        contract_type_markup = types.InlineKeyboardMarkup()
-        contract_type_markup.row(
-            types.InlineKeyboardButton("ООО СПЕЦКОНС", callback_data="contract_specons"),
-            types.InlineKeyboardButton("ООО СПЕЦЭНЕРГОРАЗВИТИЕ", callback_data="contract_ser"),
-        )
-        contract_type_markup.row(
-            types.InlineKeyboardButton(
-                "ПАСПОРТ БЕЗОПАСНОСТИ",
-                callback_data="contract_passport_security",
-            ),
-        )
         bot.send_message(
             message.chat.id,
             "❔ Выберите тип договора",
-            reply_markup=contract_type_markup,
+            reply_markup=contract_group_keyboard(),
         )
 
 
@@ -543,10 +578,56 @@ def stats_command(message):
 
 
 @bot.callback_query_handler(
+    func=lambda callback: callback.data == "contract_group_specons"
+)
+@safe_handler
+def expand_specons_group(callback):
+    """Раскрывает верхнюю кнопку «ООО СПЕЦКОНС» в подменю конкретных
+    шаблонов договоров этого юрлица (сейчас — паспорт безопасности и
+    СпецКонс; позже сюда добавятся другие шаблоны)."""
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    bot.edit_message_text(
+        "❔ ООО СПЕЦКОНС — выберите тип договора",
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        reply_markup=specons_group_keyboard(),
+    )
+
+
+@bot.callback_query_handler(
+    func=lambda callback: callback.data == "contract_group_back"
+)
+@safe_handler
+def collapse_specons_group(callback):
+    """Возвращает от подменю ООО СПЕЦКОНС к верхнему уровню выбора."""
+    bot.answer_callback_query(callback.id)
+    user_id = callback.from_user.id
+
+    if user_id not in user_data:
+        show_start_button(callback.message, user_id)
+        return
+
+    bot.edit_message_text(
+        "❔ Выберите тип договора",
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        reply_markup=contract_group_keyboard(),
+    )
+
+
+@bot.callback_query_handler(
     func=lambda callback: callback.data in (
         "contract_specons",
         "contract_ser",
         "contract_passport_security",
+        "contract_passport_security_agreed",
+        "contract_sout",
     )
 )
 @safe_handler
@@ -566,6 +647,11 @@ def choose_contract_type(callback):
             "passport_security",
             "ООО СПЕЦКОНС — ПАСПОРТ БЕЗОПАСНОСТИ",
         ),
+        "contract_passport_security_agreed": (
+            "passport_security_agreed",
+            "ООО СПЕЦКОНС — ПАСПОРТ БЕЗОПАСНОСТИ С СОГЛАСОВАНИЕМ",
+        ),
+        "contract_sout": ("sout", "ООО СПЕЦКОНС — СОУТ"),
     }
     contract_type, contract_label = contract_types[callback.data]
     user_data[user_id]["contract_type"] = contract_type
@@ -1053,10 +1139,35 @@ def costs(message):
         f"✅ Стоимость принята: <b>{value:,} ₽</b>".replace(",", " "),
         reply_markup=control_keyboard(),
     )
-    if user_data[message.from_user.id].get("contract_type") == "passport_security":
+    contract_type = user_data[message.from_user.id].get("contract_type")
+    if contract_type in ("passport_security", "passport_security_agreed"):
         send_source_selection(message)
         return
+    if contract_type == "sout":
+        register_retry(
+            message,
+            workplaces_count,
+            "❔ Введите количество рабочих мест, подлежащих специальной "
+            "оценке условий труда",
+        )
+        return
     register_retry(message, complectation, "❔ Введите количество комплектов")
+
+
+@safe_handler
+def workplaces_count(message):
+    if recover_if_requested(message) or not ensure_active_session(message):
+        return
+    value = parse_non_negative_integer(message, workplaces_count)
+    if value is None:
+        return
+    user_data[message.from_user.id]["workplaces_count"] = value
+    bot.send_message(
+        message.chat.id,
+        f"✅ Количество рабочих мест принято: <b>{value}</b>",
+        reply_markup=control_keyboard(),
+    )
+    send_source_selection(message)
 
 
 @safe_handler
@@ -1172,6 +1283,33 @@ def build_and_send_contract(
                 numer_contract,
                 numer_count,
                 texted_costs,
+                source_path,
+                allow_incomplete=allow_incomplete,
+            )
+        elif user_data[user_id].get("contract_type") == "passport_security_agreed":
+            numer_count = ms.get_bot_count_num(user_data, user_id)
+            texted_costs = ms.integer_texted(user_data[user_id]["cost"])
+            local_doc = ms.bot_insert_req_passport_security_agreed(
+                user_data,
+                user_id,
+                company_data,
+                numer_contract,
+                numer_count,
+                texted_costs,
+                source_path,
+                allow_incomplete=allow_incomplete,
+            )
+        elif user_data[user_id].get("contract_type") == "sout":
+            numer_count = ms.get_bot_count_num(user_data, user_id)
+            texted_costs = ms.integer_texted(user_data[user_id]["cost"])
+            local_doc = ms.bot_insert_req_sout(
+                user_data,
+                user_id,
+                company_data,
+                numer_contract,
+                numer_count,
+                texted_costs,
+                user_data[user_id].get("workplaces_count", ""),
                 source_path,
                 allow_incomplete=allow_incomplete,
             )
