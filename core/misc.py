@@ -2037,15 +2037,20 @@ class Miscellaneous:
 
         В отличие от «Разовых услуг»/«Паспорта безопасности», у СОУТ
         нумерация не сплошная: намеренно пропущены autozamena_003, 005,
-        006, 009 (ИП-ветвление должности/основания полномочий заказчику
-        этого шаблона не нужно — по решению пользователя договор СОУТ
-        заключается только с ООО). autozamena_022 — дата окончания
-        оказания услуг, вычисляется как дата заключения договора + 45
-        календарных дней (см. bot_insert_req_sout), в отличие от
-        остальных дат шаблона это не «сегодня», а «сегодня + 45 дней».
-        Реквизиты заказчика (ОГРН/ИНН/КПП/банк/р-с/к-с/БИК) в этом
-        шаблоне — отдельные плейсхолдеры, а не два объединённых блока,
-        как в остальных шаблонах СпецКонс.
+        006, 009. autozamena_022 — дата окончания оказания услуг,
+        вычисляется как дата заключения договора + 45 календарных дней
+        (см. bot_insert_req_sout), в отличие от остальных дат шаблона
+        это не «сегодня», а «сегодня + 45 дней». Реквизиты заказчика
+        (ОГРН/ИНН/КПП/банк/р-с/к-с/БИК) в этом шаблоне — отдельные
+        плейсхолдеры, а не два объединённых блока, как в остальных
+        шаблонах СпецКонс.
+
+        autozamena_023 — представитель заказчика во вступительной части
+        договора: для ООО это «в лице генерального директора ФИО.,
+        действующего на основании Устава, именуемое», для ИП — «,
+        действующий на основании листа записи ЕГРИП, именуемый»
+        (без должности и ФИО директора — у ИП его нет). См.
+        is_individual_entrepreneur/bot_insert_req_sout.
         """
         namespaces = {'w': cls.WORD_NS}
         with ZipFile(template_path, 'r') as archive:
@@ -2064,7 +2069,7 @@ class Miscellaneous:
             f'autozamena_{index:03d}'
             for index in (
                 1, 2, 4, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-                22,
+                22, 23,
             )
         }
         present = set(re.findall(r'autozamena_\d{3}', document_text))
@@ -2134,6 +2139,20 @@ class Miscellaneous:
         )
         fio_short = self.abbreviate_fio(field(4))
 
+        is_entrepreneur = self.is_individual_entrepreneur(field(0))
+        ustav = 'листа записи ЕГРИП' if is_entrepreneur else 'Устава'
+        if is_entrepreneur:
+            # У ИП нет генерального директора — только сам ИП и
+            # основание его полномочий (лист записи ЕГРИП).
+            customer_clause = (
+                f', действующий на основании {ustav}, именуемый'
+            )
+        else:
+            customer_clause = (
+                f' в лице генерального директора  {field(3)}., '
+                f'действующего на основании {ustav}, именуемое'
+            )
+
         now = datetime.now()
         date_start = (
             f'{now.day} '
@@ -2166,6 +2185,7 @@ class Miscellaneous:
             'autozamena_020': field(9),
             'autozamena_021': field(10),
             'autozamena_022': date_end,
+            'autozamena_023': customer_clause,
         }
 
         highlight_keys: set[str] = set()
@@ -2173,6 +2193,8 @@ class Miscellaneous:
             highlight_keys.add('autozamena_004')
         if not field(3):
             highlight_keys.add('autozamena_007')
+        if not is_entrepreneur and not field(3):
+            highlight_keys.add('autozamena_023')
         if not fio_short.strip():
             highlight_keys.add('autozamena_008')
         if not field(5):
